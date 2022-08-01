@@ -5,7 +5,139 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+// Source of frames
+type Source interface {
+	Next(ctx context.Context, img *Image) error // get next frame
+}
+
+// --------------------------------
+// Metrics
+// --------------------------------
+
+var (
+	compressionTime = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "compression_latency",
+		Help: "JPEG Compression latency",
+		Buckets: []float64{
+			10, 30, 60, 120, 250, 500, 1000, 2500,
+		},
+	})
+
+	compressedSize = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "compressed_size",
+		Help: "Size of compressed frames",
+		Buckets: []float64{
+			16384, 65535, 262144, 524288, 1048576, 2097152, 4194304,
+		},
+	})
+
+	compressionStatus = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "compression_status",
+		Help: "Compression results by status",
+	}, []string{"status"})
+
+	streamingSessions = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pipeline_sessions",
+		Help: "Accumulated number of sessions",
+	})
+
+	sessionDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "pipeline_session_duration",
+		Help: "Pipeline session duration (seconds)",
+		Buckets: []float64{
+			1, 60, 1800, 7200, 28800,
+		},
+	})
+)
+
+// ---------------------------------
+// Raw Pool - implements a fixed pool of buffers
+// for raw images.
+// ---------------------------------
+
+// rawPool manages raw image frames
+type rawPool struct {
+	freeList chan *Image
+	poolSize int
+}
+
+// Setup the stream with initial buffers
+func newRawPool(poolSize int, features RawFeatures) *rawPool {
+	pool := &rawPool{
+		poolSize: poolSize,
+		freeList: make(chan *Image, poolSize),
+	}
+	for i := 0; i < poolSize; i++ {
+		image := &Image{}
+		image.Alloc(features.Pitch() * features.Height)
+		pool.freeList <- image
+	}
+	return pool
+}
+
+// Stream frame
+type rawFrame struct {
+	number   uint64
+	image    *Image      // input buffer
+	features RawFeatures // raw frame features
+}
+
+// Stream a source through a rawFrame channel
+func (pool *rawPool) stream(ctx context.Context, source Source, features RawFeatures) chan rawFrame {
+	frames := make(chan rawFrame, pool.poolSize)
+	go func() {
+		defer close(frames)
+		var frameNumber uint64 = 1 // always skip frame 0
+		for {
+			var srcImage *Image
+			var ok bool
+			select {
+			case <-ctx.Done():
+				return
+			case srcImage, ok = <-pool.freeList:
+				if !ok {
+					return
+				}
+			}
+			if err := source.Next(ctx, srcImage); err != nil {
+				return
+			}
+			newFrame := rawFrame{
+				number:   frameNumber,
+				image:    srcImage,
+				features: features,
+			}
+			select {
+			case <-ctx.Done():
+				pool.freeList <- srcImage
+				return
+			case frames <- newFrame:
+				frameNumber += 1
+			}
+		}
+	}()
+	return frames
+}
+
+// Free all the resources of the pool
+func (pool *rawPool) Free() {
+	// consume all freeList items
+	for i := 0; i < pool.poolSize; i++ {
+		frame := <-pool.freeList
+		frame.Free()
+	}
+	close(pool.freeList)
+}
+
+// -------------------------
+// Frame: contains info about a compressed image,
+// along with the compression status
+// -------------------------
 
 type FrameStatus int
 
@@ -17,200 +149,179 @@ const (
 	FrameStuck                          // frame was not processed because some reader had it locked
 )
 
-// Source of frames
-type Source interface {
-	Next(ctx context.Context, img *Image) // get next frame
+var frameStatusNames = []string{
+	"FrameEmpty",
+	"FrameCompressing",
+	"FrameReady",
+	"FrameFailed",
+	"FrameStuck",
 }
 
 // Compressed frame
-type Frame struct {
+type JpegFrame struct {
 	number   uint64
-	status   FrameStatus
-	features JpegFeatures
 	image    Image
+	features JpegFeatures
+	status   FrameStatus
 	group    sync.WaitGroup // readers sending the image to clients
 }
 
-// drainer of Sources
-type drainer struct {
-	currentFrame uint64
-	rawFrames    chan *Image
-	NumRawFrames int
+// Done tells the compressors they can overwrite the internal buffers
+func (frame *JpegFrame) Done() {
+	frame.group.Done()
 }
 
-// Setup the drainer with initial buffers
-func (d *drainer) Setup(numRawFrames int) {
-	d.NumRawFrames = numRawFrames
-	d.currentFrame = 0
-	d.rawFrames = make(chan *Image, numRawFrames)
-	for i := 0; i < numRawFrames; i++ {
-		d.rawFrames <- &Image{}
+// Return the frame content as a byte array.
+// Must not be used after Done
+func (frame *JpegFrame) Slice() []byte {
+	return frame.image.Slice()
+}
+
+// ----------------------------
+// JpegPool: hash buffer for compressed images.
+// Hash key is just the frame number - the pool is designed to store
+// consecutive frames.
+// The pool size must be larger than the RawPool buffer size,
+// to avoid overwriting a frame which is still being compressed.
+// ------------------------------
+
+// JpegPool holds a fixed size hash of compressed frames
+type jpegPool struct {
+	sync.Mutex
+	sync.Cond
+	frames []*JpegFrame // Buffer of compressed frames
+}
+
+// New compressed pool
+func newJpegPool(poolSize int, features RawFeatures) *jpegPool {
+	pool := &jpegPool{
+		frames: make([]*JpegFrame, poolSize),
 	}
-}
-
-// Release an image back to the free image list
-func (d *drainer) Release(img *Image) {
-	d.rawFrames <- img
-}
-
-// compression task
-type task struct {
-	frameNumber uint64
-	rawFrame    *Image // input buffer
-}
-
-// Reset the drainer count to frame number 0
-func (d *drainer) Reset(frameNumber uint64) {
-	atomic.StoreUint64(&(d.currentFrame), frameNumber)
-}
-
-// Drain a source by sending a task per frame, until context is cancelled
-func (d *drainer) Drain(ctx context.Context, source Source, tasks chan task) {
-	var frameNumber uint64 = atomic.LoadUint64(&(d.currentFrame))
-	for {
-		var rawFrame *Image
-		select {
-		case <-ctx.Done():
-			d.rawFrames <- rawFrame
-			return
-		case rawFrame = <-d.rawFrames:
-		}
-		source.Next(ctx, rawFrame)
-		atomic.StoreUint64(&(d.currentFrame), frameNumber)
-		select {
-		case <-ctx.Done():
-			d.rawFrames <- rawFrame
-			return
-		case tasks <- task{frameNumber: frameNumber, rawFrame: rawFrame}:
-			frameNumber += 1
-		}
-	}
-}
-
-// CurrentFrame returns the current frame being processed
-func (d *drainer) CurrentFrame() uint64 {
-	return atomic.LoadUint64(&(d.currentFrame))
-}
-
-// Pool of compression gophers
-type Pool struct {
-	// Compression parameters
-	subsampling Subsampling
-	quality     int
-	flags       int
-
-	// Compression gopher group
-	drainer drainer        // Source drainer
-	group   sync.WaitGroup // compression gophers
-
-	// Compressed frames
-	lock    sync.Mutex
-	frames  []*Frame  // Circular buffer of compressed frames
-	running bool      // true if there are gophers running
-	changed sync.Cond // New compressed frame available
-}
-
-// New compression pool
-func New(rawFrames int, jpegFrames int, subsampling Subsampling, quality int, flags int) *Pool {
-	pool := &Pool{
-		subsampling: subsampling,
-		quality:     quality,
-		flags:       flags,
-	}
-	pool.changed.L = &(pool.lock)
-	pool.drainer.Setup(rawFrames)
-
-	pool.frames = make([]*Frame, jpegFrames)
-	for i := 0; i < jpegFrames; i++ {
-		pool.frames[i] = &Frame{}
+	pool.Cond.L = &(pool.Mutex)
+	for i := 0; i < poolSize; i++ {
+		frame := &JpegFrame{}
+		frame.image.Alloc(features.Pitch() * features.Height)
+		pool.frames[i] = frame
 	}
 	return pool
 }
 
-// Stream the source provided, using a pool of `poolSize` compressors
-func (pool *Pool) Stream(ctx context.Context, source Source, features RawFeatures, poolSize int) {
-	// Make sure other sources are stopped
-	pool.Wait()
-	pool.drainer.Reset(0)
-	// Clean the frames
-	pool.lock.Lock()
-	defer pool.lock.Unlock()
-	for i := 0; i < len(pool.frames); i++ {
-		pool.frames[i].number = 0
-	}
-	// launch the compressors
-	tasks := make(chan task, pool.drainer.NumRawFrames)
-	for i := 0; i < poolSize; i++ {
-		pool.group.Add(1)
-		go func() {
-			defer pool.group.Done()
-			compressor := NewCompressor()
-			defer func() {
-				compressor.Free()
-			}()
-			for task := range tasks {
-				compressor = pool.run(compressor, task, features)
-			}
-		}()
-	}
-	// launch the source drainer
-	pool.group.Add(1) // count the source also
-	go func() {
-		// Once the source drain is cancelled, clean it all up
-		defer pool.group.Done()
-		defer close(tasks)
-		defer func() {
-			pool.lock.Lock()
-			defer pool.lock.Unlock()
-			pool.running = false
-			pool.changed.Broadcast()
-		}()
-		pool.drainer.Drain(ctx, source, tasks)
-	}()
-	// Set the running flag
-	pool.running = true
-}
-
-// Wait for the pool to be fully stopped (it should be cancelled first)
-func (pool *Pool) Wait() {
-	pool.group.Wait()
-	// Once no gophers are running, we can iterate the frames array
-	for i := 0; i < len(pool.frames); i++ {
-		pool.frames[i].group.Wait()
+// Join waits for all readers to finish and frees compressed pool resources
+func (p *jpegPool) Join() {
+	for i := 0; i < len(p.frames); i++ {
+		p.frames[i].group.Wait()
+		p.frames[i].image.Free()
 	}
 }
 
 // lock a frame for compressing
-func (pool *Pool) lockFrame(frameNumber uint64) (frameIndex int, frame *Frame) {
-	frameIndex = int(frameNumber % uint64(len(pool.frames)))
-	pool.lock.Lock()
-	defer pool.lock.Unlock()
-	frame = pool.frames[frameIndex]
+func (pool *jpegPool) hold(frameNumber uint64) (frameIndex int, frame *JpegFrame, oldStatus FrameStatus) {
+	frame, frameIndex = pool.frameAt(frameNumber)
+	pool.Lock()
+	defer pool.Unlock()
+	oldStatus = frame.status
 	frame.number = frameNumber
 	frame.status = FrameCompressing
 	return
 }
 
 // release a frame after compression
-func (pool *Pool) releaseFrame(frameIndex int, status FrameStatus) {
-	pool.lock.Lock()
-	defer pool.lock.Unlock()
+func (pool *jpegPool) release(frameIndex int, status FrameStatus) {
+	pool.Lock()
+	defer pool.Unlock()
 	pool.frames[frameIndex].status = status
-	pool.changed.Broadcast()
+	pool.Broadcast()
+}
+
+// frameAt returns the frame and frameIndex for the given frameNumber
+func (pool *jpegPool) frameAt(frameNumber uint64) (*JpegFrame, int) {
+	frameIndex := int(frameNumber % uint64(len(pool.frames)))
+	return pool.frames[frameIndex], frameIndex
+}
+
+// ---------------------------
+// Farm: fixed set of compressors
+// ---------------------------
+
+// Task running in a compression farm
+type farmTask struct {
+	rawFrame rawFrame        // Input frame to compress
+	freeList chan *Image     // Return raw image to free list when done
+	jpegPool *jpegPool       // Pool to use for compressed frames
+	group    *sync.WaitGroup // notify on compression finished
+}
+
+// Farm  of compression gophers
+type Farm struct {
+	// Compression parameters
+	subsampling Subsampling
+	quality     int
+	flags       int
+
+	// Compression gopher group
+	tasks chan farmTask
+	group sync.WaitGroup
+}
+
+// New compression pool
+func newFarm(farmSize, taskSize int, subsampling Subsampling, quality int, flags int) *Farm {
+	farm := &Farm{
+		subsampling: subsampling,
+		quality:     quality,
+		flags:       flags,
+		tasks:       make(chan farmTask, taskSize),
+	}
+	// launch the compressors
+	for i := 0; i < farmSize; i++ {
+		farm.group.Add(1)
+		go func() {
+			defer farm.group.Done()
+			compressor := NewCompressor()
+			defer func() {
+				compressor.Free()
+			}()
+			for task := range farm.tasks {
+				start := time.Now()
+				compressor = farm.run(compressor, task)
+				compressionTime.Observe(float64(time.Since(start).Milliseconds()))
+			}
+		}()
+	}
+	return farm
+}
+
+// Stop closes the task channel and stops accepting tasks
+func (farm *Farm) Stop() {
+	close(farm.tasks)
+	farm.group.Wait()
+}
+
+// Push a task to the pool. Panics if called after Stop()
+func (farm *Farm) push(task farmTask) {
+	farm.tasks <- task
 }
 
 // run a compression task
-func (pool *Pool) run(compressor Compressor, task task, features RawFeatures) Compressor {
-	// Release raw frame on ending
+func (farm *Farm) run(compressor Compressor, task farmTask) Compressor {
+	// Notify the task and release resources at the end
 	defer func() {
-		pool.drainer.Release(task.rawFrame)
+		task.freeList <- task.rawFrame.image
+		task.group.Done()
 	}()
-	frameIndex, frame := pool.lockFrame(task.frameNumber)
-	status := FrameFailed
-	// Release compressed frame on ending
+	// Get the buffer for compressed frame, release at the end
+	frameIndex, frame, oldStatus := task.jpegPool.hold(task.rawFrame.number)
+	newStatus := FrameFailed
 	defer func() {
-		pool.releaseFrame(frameIndex, status)
+		statusName := frameStatusNames[newStatus]
+		compressionStatus.WithLabelValues(statusName).Inc()
 	}()
+	defer func() {
+		task.jpegPool.release(frameIndex, newStatus)
+	}()
+	if oldStatus == FrameCompressing {
+		// Someone else compressing the frame, should not happen.
+		return compressor
+	}
 	// Make sure the frame is not stuck sending somewhere
 	unused := make(chan struct{})
 	go func() {
@@ -222,64 +333,132 @@ func (pool *Pool) run(compressor Compressor, task task, features RawFeatures) Co
 	case <-unused: // everything fine
 		watchdog.Stop()
 	case <-watchdog.C:
-		status = FrameStuck
+		newStatus = FrameStuck
 		return compressor
 	}
 	// Once the frame is unused, overwrite it
 	var err error
-	frame.features, err = compressor.Compress(task.rawFrame, features, &(frame.image), pool.subsampling, pool.quality, pool.flags)
+	frame.features, err = compressor.Compress(
+		task.rawFrame.image,
+		task.rawFrame.features,
+		&(frame.image),
+		farm.subsampling,
+		farm.quality,
+		farm.flags|TJFLAG_NOREALLOC,
+	)
 	if err != nil {
-		// Release the image buffer, just in case
-		frame.image.Free()
-		// Also release the compressor
+		// Release the compressor, just in case
 		compressor.Free()
 		compressor = NewCompressor()
 	} else {
-		status = FrameReady
+		newStatus = FrameReady
+		compressedSize.Observe(float64(frame.image.Size()))
 	}
 	return compressor
 }
 
-// Next returns the frame with the given number or closer to that, or nil if not streaming
-func (pool *Pool) Next(frameNumber uint64) (*Frame, uint64, FrameStatus) {
-	pool.lock.Lock()
-	defer pool.lock.Unlock()
-	for {
-		currentFrame := pool.drainer.CurrentFrame()
-		frameIndex := int(frameNumber % uint64(len(pool.frames)))
-		frame := pool.frames[frameIndex]
-		switch {
-		case !pool.running:
-			// Returns nil on cancelled
-			return nil, 0, FrameEmpty
-		case frameNumber == frame.number:
-			if frame.status != FrameEmpty && frame.status != FrameCompressing {
-				frame.group.Add(1) // Increase the number of readers of the frame
-				return frame, frame.number, frame.status
-			}
-			pool.changed.Wait()
-		case frameNumber > frame.number:
-			if frameNumber > currentFrame { // if waiting for a frame yet to arrive, set it to the next frame
-				frameNumber = currentFrame + 1
-			}
-			pool.changed.Wait()
-		case frameNumber < frame.number:
-			// If frame is way too old, skip to the oldest frame we might still have
-			if frameNumber+uint64(len(pool.frames)) <= currentFrame {
-				frameNumber = currentFrame - uint64(len(pool.frames))
-			}
-			frameNumber += 1
-		}
+// ------------------------------
+// Pipeline: holds the frame pools (both raw and compressed),
+// and the compression farm
+// ------------------------------
+
+type Pipeline struct {
+	rawPool  *rawPool
+	jpegPool *jpegPool
+	farm     *Farm
+}
+
+// New compressin pipeline
+// jpegPoolSize must be > rawPoolSize + farmSize`
+func New(rawPoolSize, jpegPoolSize, farmSize int, features RawFeatures, subsampling Subsampling, quality int, flags int) *Pipeline {
+	return &Pipeline{
+		rawPool:  newRawPool(rawPoolSize, features),
+		jpegPool: newJpegPool(jpegPoolSize, features),
+		farm:     newFarm(farmSize, rawPoolSize, subsampling, quality, flags),
 	}
 }
 
-// Release frame so that the buffer might be used again
-func (frame *Frame) Release() {
-	frame.group.Done()
+// Join and free all resources. All Sessions must be joined before this.
+func (p *Pipeline) Join() {
+	p.farm.Stop()
+	p.jpegPool.Join()
+	p.rawPool.Free()
 }
 
-// Return the frame content as a byte array.
-// Must not be used after Release
-func (frame *Frame) Slice() []byte {
-	return frame.image.Slice()
+// Session keeps streaming from the Source until cancelled
+type Session struct {
+	currentFrame  uint64 // latest frame sent for compression. Not running if 0.
+	pendingFrames sync.WaitGroup
+	jpegPool      *jpegPool
+}
+
+// Session starts a streaming session from the given Source
+func (pipeline *Pipeline) Session(ctx context.Context, source Source, features RawFeatures) *Session {
+	session := &Session{
+		currentFrame: 1, // 0 is reserved for closed stream
+		jpegPool:     pipeline.jpegPool,
+	}
+	session.pendingFrames.Add(1)
+	start := time.Now()
+	go func() {
+		defer func() {
+			sessionDuration.Observe(time.Since(start).Seconds())
+		}()
+		defer session.pendingFrames.Done()
+		defer func() {
+			// Store frmae number 0 -> not running
+			atomic.StoreUint64(&(session.currentFrame), 0)
+			session.jpegPool.Broadcast() // let all the readers notice
+		}()
+		for rawFrame := range pipeline.rawPool.stream(ctx, source, features) {
+			rawFrame := rawFrame // avoid aliasing the loop variable
+			atomic.StoreUint64(&(session.currentFrame), rawFrame.number)
+			session.pendingFrames.Add(1) // Will be flagged .Done() by compressor
+			pipeline.farm.push(farmTask{
+				rawFrame: rawFrame,
+				freeList: pipeline.rawPool.freeList,
+				jpegPool: pipeline.jpegPool,
+				group:    &(session.pendingFrames),
+			})
+		}
+	}()
+	streamingSessions.Inc()
+	return session
+}
+
+// Current frame number. If == 0, session is stopped.
+func (session *Session) CurrentFrame() uint64 {
+	return atomic.LoadUint64(&(session.currentFrame))
+}
+
+// Join the session once it has been cancelled
+func (session *Session) Join() {
+	session.pendingFrames.Wait()
+}
+
+// Next frame at or after the given frameNumber for this session.
+// Returns nil if the stream is closed
+func (session *Session) Next(frameNumber uint64) (*JpegFrame, uint64, FrameStatus) {
+	session.jpegPool.Lock()
+	defer session.jpegPool.Unlock()
+	for {
+		frame, _ := session.jpegPool.frameAt(frameNumber)
+		currentFrame := session.CurrentFrame()
+		switch {
+		case currentFrame == 0: // stopped
+			return nil, 0, FrameEmpty
+		case frame.number == frameNumber: // frame in the pool
+			if frame.status != FrameEmpty && frame.status != FrameCompressing {
+				frame.group.Add(1) // Increment the read count for this frame
+				return frame, frame.number, frame.status
+			}
+		case frameNumber > currentFrame: // future frame
+			frameNumber = currentFrame + 1
+		default:
+			// The frame number is past and no longer available.
+			// pick the current frame.
+			frameNumber = currentFrame
+		}
+		session.jpegPool.Wait()
+	}
 }

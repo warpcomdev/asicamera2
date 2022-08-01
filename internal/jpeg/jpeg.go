@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"unsafe"
 )
@@ -24,14 +25,30 @@ type PixelFormat int // PixelFormat of the raw image (See TJPF in turbojpeg.h)
 type Subsampling int // Subsampling of the jpeg image (See TJSAMP in turbojpeg.h)
 
 const (
-	PF_RGBA = C.TJPF_RGBA // Common pixel format for golang.Image
-	PF_RGB  = C.TJPF_RGB  // Common pixel format for ASICamera
+	PF_RGBA PixelFormat = C.TJPF_RGBA // Common pixel format for golang.Image
+	PF_RGB  PixelFormat = C.TJPF_RGB  // Common pixel format for ASICamera
+)
+
+const TJFLAG_NOREALLOC = C.TJFLAG_NOREALLOC
+
+const (
+	TJSAMP_444  Subsampling = C.TJSAMP_444
+	TJSAMP_422  Subsampling = C.TJSAMP_422
+	TJSAMP_420  Subsampling = C.TJSAMP_420
+	TJSAMP_GRAY Subsampling = C.TJSAMP_GRAY
+	TJSAMP_440  Subsampling = C.TJSAMP_440
+	TJSAMP_411  Subsampling = C.TJSAMP_411
 )
 
 // Image buffer. Can be a jpeg or a raw image
 type Image struct {
 	buffer  *C.uchar // Buffer as unsigned char * (turbojpeg API format)
 	imgsize int      // size of the image in the buffer
+}
+
+// Size currently allocated to the image
+func (img *Image) Size() int {
+	return img.imgsize
 }
 
 // Slice returns a reference to the image as a byte slice.
@@ -43,6 +60,7 @@ func (img *Image) Slice() []byte {
 
 // Alloc a buffer with the given capacity in bytes
 func (img *Image) Alloc(size int) error {
+	log.Printf("Allocating %d bytes for image", size)
 	buf := C.tjAlloc(C.int(size))
 	if buf == nil {
 		return fmt.Errorf("Failed to allocate %d bytes", size)
@@ -56,6 +74,7 @@ func (img *Image) Alloc(size int) error {
 // Free the allocated buffer, if any
 func (img *Image) Free() {
 	if img.imgsize > 0 {
+		log.Printf("Releasing image of size %d", img.imgsize)
 		C.tjFree(img.buffer)
 	}
 	img.imgsize = 0
@@ -81,7 +100,7 @@ type RawFeatures struct {
 }
 
 // Pitch equals width times bytes per pixel
-func (r RawFeatures) pitch() int {
+func (r RawFeatures) Pitch() int {
 	return int(C.bytes_per_pixel(C.int(r.Format))) * r.Width
 }
 
@@ -169,7 +188,7 @@ func (d Decompressor) Decompress(input *Image, jpegFeat JpegFeatures, output *Im
 		return RawFeatures{}, errors.New("output cannot be nil")
 	}
 	rawFeat := RawFeatures{Features: jpegFeat.Features, Format: format}
-	pitch := rawFeat.pitch()
+	pitch := rawFeat.Pitch()
 	rawSize := pitch * rawFeat.Height
 	if output.imgsize < rawSize {
 		if err := output.Alloc(rawSize); err != nil {
@@ -186,7 +205,7 @@ func (d Decompressor) Decompress(input *Image, jpegFeat JpegFeatures, output *Im
 // Compress the input buffer
 func (c *Compressor) Compress(input *Image, rawFeat RawFeatures, output *Image, subsamp Subsampling, quality int, flags int) (JpegFeatures, error) {
 	buffer, bufsize := output.buffer, C.ulong(output.imgsize)
-	code := C.tjCompress2(c.handle, input.buffer, C.int(rawFeat.Width), C.int(rawFeat.pitch()), C.int(rawFeat.Height), C.int(rawFeat.Format), &buffer, &bufsize, C.int(subsamp), C.int(quality), C.int(flags))
+	code := C.tjCompress2(c.handle, input.buffer, C.int(rawFeat.Width), C.int(rawFeat.Pitch()), C.int(rawFeat.Height), C.int(rawFeat.Format), &buffer, &bufsize, C.int(subsamp), C.int(quality), C.int(flags))
 	if code != 0 {
 		return JpegFeatures{}, handleError(c.handle)
 	}

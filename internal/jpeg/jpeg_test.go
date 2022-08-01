@@ -1,6 +1,9 @@
 package jpeg
 
 import (
+	"bytes"
+	imagejpeg "image/jpeg"
+	"io/ioutil"
 	"os"
 	"testing"
 )
@@ -19,6 +22,23 @@ func BenchmarkDecompress(b *testing.B) {
 	out := &Image{}
 	for n := 0; n < b.N; n++ {
 		if _, err := d.Decompress(img, feat, out, PF_RGBA, 0); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDecompressBuiltin(b *testing.B) {
+	infile, err := os.Open("samples/samples.jpg")
+	if err != nil {
+		b.Fatal(err)
+	}
+	buf, err := ioutil.ReadAll(infile)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		if _, err := imagejpeg.Decode(bytes.NewReader(buf)); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -47,6 +67,27 @@ func BenchmarkCompress(b *testing.B) {
 
 	for n := 0; n < b.N; n++ {
 		if _, err := c.Compress(out, rawFmt, img, feat.Subsampling, 95, 0); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCompressBuiltin(b *testing.B) {
+	infile, err := os.Open("samples/samples.jpg")
+	if err != nil {
+		b.Fatal(err)
+	}
+	buf, err := ioutil.ReadAll(infile)
+	if err != nil {
+		b.Fatal(err)
+	}
+	image, err := imagejpeg.Decode(bytes.NewReader(buf))
+	w := bytes.NewBuffer(make([]byte, 0, len(buf)))
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		w.Reset()
+		if imagejpeg.Encode(w, image, &imagejpeg.Options{Quality: 95}); err != nil {
 			b.Fatal(err)
 		}
 	}
