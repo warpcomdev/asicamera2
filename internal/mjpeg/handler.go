@@ -132,6 +132,7 @@ func Handler(mgr SessionManager) http.Handler {
 				// exhaust the frame goroutine
 				conn.Close()
 				for _ = range frames {
+					frame.Done()
 				}
 				return
 			}
