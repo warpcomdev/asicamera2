@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -72,11 +73,12 @@ func main() {
 		log.Fatal(err)
 	}
 
+	frames_per_second := 15
 	fsm := fakeSessionManager{
-		Pipeline: jpeg.New(8, 32, 4, fs.Features, jpeg.TJSAMP_422, 95, 0),
+		Pipeline: jpeg.New(frames_per_second, 3*frames_per_second, 8, fs.Features, jpeg.TJSAMP_420, 95, 0),
 		Source:   fs,
 	}
-	go fsm.Source.Run(context.Background(), 10) // Run at 10 fps
+	go fsm.Source.Run(context.Background(), frames_per_second)
 	handler := mjpeg.Handler(fsm)
 
 	http.HandleFunc("/mjpeg", func(w http.ResponseWriter, r *http.Request) {
@@ -90,5 +92,15 @@ func main() {
 	http.Handle("/metrics", promhttp.Handler())
 
 	fmt.Println("Listening on port :8080")
-	fmt.Println(http.ListenAndServe("0.0.0.0:8080", nil))
+	//Cannot set absolute timeout because mjpeg hander is streaming
+	//Must implement Hijack to fix
+	srv := &http.Server{
+		Addr:           ":8080",
+		Handler:        http.DefaultServeMux,
+		ReadTimeout:    5 * time.Second,
+		WriteTimeout:   7 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+	log.Fatal(srv.ListenAndServe())
+	//log.Fatal(http.ListenAndServe("0.0.0.0:8080", nil))
 }
