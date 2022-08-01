@@ -105,6 +105,7 @@ func (pool *rawPool) stream(ctx context.Context, source Source, features RawFeat
 				}
 			}
 			if err := source.Next(ctx, srcImage); err != nil {
+				pool.freeList <- srcImage // return the image to the free list
 				return
 			}
 			newFrame := rawFrame{
