@@ -64,6 +64,7 @@ var (
 type rawPool struct {
 	freeList chan *Image
 	poolSize int
+	free     chan struct{} // closed by Free to shutdown the watchdog
 }
 
 // Setup the stream with initial buffers
@@ -71,12 +72,14 @@ func newRawPool(poolSize int, features RawFeatures) *rawPool {
 	pool := &rawPool{
 		poolSize: poolSize,
 		freeList: make(chan *Image, poolSize),
+		free:     make(chan struct{}),
 	}
 	for i := 0; i < poolSize; i++ {
 		image := &Image{}
 		image.Alloc(features.Pitch() * features.Height)
 		pool.freeList <- image
 	}
+	go pool.watchdog()
 	return pool
 }
 
@@ -125,8 +128,35 @@ func (pool *rawPool) stream(ctx context.Context, source Source, features RawFeat
 	return frames
 }
 
+// Monitors the free list
+func (pool *rawPool) watchdog() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		// align with a tick interval
+		select {
+		case <-pool.free:
+			return
+		case <-ticker.C:
+		}
+		// try to acquire a free buffer before the next tick
+		select {
+		case <-pool.free:
+			return
+		case img, ok := <-pool.freeList:
+			if !ok {
+				return // list closed
+			}
+			pool.freeList <- img
+		case <-ticker.C:
+			panic("no free raw buffers for 10 seconds")
+		}
+	}
+}
+
 // Free all the resources of the pool
 func (pool *rawPool) Free() {
+	close(pool.free) // stop the watchdog
 	// consume all freeList items
 	for i := 0; i < pool.poolSize; i++ {
 		frame := <-pool.freeList
@@ -178,6 +208,26 @@ func (frame *JpegFrame) Slice() []byte {
 	return frame.image.Slice()
 }
 
+// Wait for the frame to be available (nothing in the wait group)
+func (frame *JpegFrame) available(t time.Duration) bool {
+	available := make(chan struct{})
+	go func() {
+		defer close(available)
+		frame.group.Wait() // wait until no readers
+		// The goroutine will leak if there are readers stuck.
+		// But JpegPool will trigger a watchdog that will panic
+		// if the frame is stuck for too long, so this is ok.
+	}()
+	watchdog := time.NewTimer(t)
+	select {
+	case <-available: // everything fine
+		watchdog.Stop()
+		return true
+	case <-watchdog.C:
+		return false
+	}
+}
+
 // ----------------------------
 // JpegPool: hash buffer for compressed images.
 // Hash key is just the frame number - the pool is designed to store
@@ -215,18 +265,21 @@ func (p *jpegPool) Join() {
 	}
 }
 
-// lock a frame for compressing
+// lock a frame for compressing.
 func (pool *jpegPool) hold(frameNumber uint64) (frameIndex int, frame *JpegFrame, oldStatus FrameStatus) {
 	frame, frameIndex = pool.frameAt(frameNumber)
 	pool.Lock()
 	defer pool.Unlock()
 	oldStatus = frame.status
+	if oldStatus == FrameCompressing {
+		return 0, nil, oldStatus // should not happen
+	}
 	frame.number = frameNumber
 	frame.status = FrameCompressing
 	return
 }
 
-// release a frame after compression
+// release a frame after compression.
 func (pool *jpegPool) release(frameIndex int, status FrameStatus) {
 	pool.Lock()
 	defer pool.Unlock()
@@ -309,8 +362,13 @@ func (farm *Farm) run(compressor Compressor, task farmTask) Compressor {
 		task.freeList <- task.rawFrame.image
 		task.group.Done()
 	}()
-	// Get the buffer for compressed frame, release at the end
+	// Get the buffer for compressed frame
 	frameIndex, frame, oldStatus := task.jpegPool.hold(task.rawFrame.number)
+	if frame == nil {
+		// Someone else compressing the frame, should not happen.
+		return compressor
+	}
+	// Prepare the cleanup functions
 	newStatus := FrameFailed
 	defer func() {
 		statusName := frameStatusNames[newStatus]
@@ -319,22 +377,17 @@ func (farm *Farm) run(compressor Compressor, task farmTask) Compressor {
 	defer func() {
 		task.jpegPool.release(frameIndex, newStatus)
 	}()
-	if oldStatus == FrameCompressing {
-		// Someone else compressing the frame, should not happen.
-		return compressor
-	}
 	// Make sure the frame is not stuck sending somewhere
-	unused := make(chan struct{})
-	go func() {
-		defer close(unused)
-		frame.group.Wait() // wait until no readers, since we might overwrite Image internal buffers
-	}()
-	watchdog := time.NewTimer(time.Second)
-	select {
-	case <-unused: // everything fine
-		watchdog.Stop()
-	case <-watchdog.C:
+	if !frame.available(2 * time.Second) {
 		newStatus = FrameStuck
+		if oldStatus != FrameStuck {
+			// Start a watchdog if the frame was not stuck before
+			go func() {
+				if !frame.available(10 * time.Second) {
+					panic("compressed frame stuck for longer than 10 seconds")
+				}
+			}()
+		}
 		return compressor
 	}
 	// Once the frame is unused, overwrite it

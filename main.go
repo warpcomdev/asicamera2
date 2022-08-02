@@ -13,14 +13,33 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/warpcomdev/asicamera2/internal/fakesource"
 	"github.com/warpcomdev/asicamera2/internal/jpeg"
 	"github.com/warpcomdev/asicamera2/internal/mjpeg"
+)
+
+var (
+	startMetric = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "start",
+		Help: "Start timestamp of the app (unix)",
+	})
+
+	infoMetric = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "info",
+			Help: "Service info",
+		},
+		[]string{
+			"start",
+			"libversion",
+		},
+	)
 )
 
 func abort(funcname string, err error) {
@@ -68,6 +87,14 @@ func main() {
 		return
 	}
 
+	// Register startup metrics
+	startTime := time.Now()
+	startMetric.Set(float64(startTime.Unix()))
+	infoMetric.WithLabelValues(
+		startTime.Format(time.RFC3339),
+		C.GoString(apiVersion),
+	).Set(1)
+
 	fs, err := fakesource.New(os.DirFS("."), os.Args[1])
 	if err != nil {
 		log.Fatal(err)
@@ -79,16 +106,8 @@ func main() {
 		Source:   fs,
 	}
 	go fsm.Source.Run(context.Background(), frames_per_second)
-	handler := mjpeg.Handler(fsm)
 
-	http.HandleFunc("/mjpeg", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s %s\n", r.RemoteAddr, r.Method, r.URL)
-		if strings.HasPrefix(r.URL.Path, "/mjpeg") {
-			handler.ServeHTTP(w, r)
-			return
-		}
-		http.Error(w, "path not found", http.StatusNotFound)
-	})
+	http.Handle("/mjpeg", mjpeg.Handler(fsm))
 	http.Handle("/metrics", promhttp.Handler())
 
 	fmt.Println("Listening on port :8080")
