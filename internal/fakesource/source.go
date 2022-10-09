@@ -17,29 +17,6 @@ type Source struct {
 	Offset   int
 }
 
-func New(fsys fs.FS, path string) (*Source, error) {
-	d := jpeg.NewDecompressor()
-	defer d.Free()
-
-	img := &jpeg.Image{}
-	defer img.Free()
-	feat, err := d.ReadFile(fsys, path, img)
-	if err != nil {
-		return nil, err
-	}
-	out := &jpeg.Image{}
-	features, err := d.Decompress(img, feat, out, jpeg.PF_RGBA, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Source{
-		RawImage: out,
-		Features: features,
-		Stream:   make(chan *jpeg.Image),
-	}, nil
-}
-
 func (s *Source) Run(ctx context.Context, fps int) {
 	ticker := time.NewTicker(time.Duration(1000/fps) * time.Millisecond)
 	for {
@@ -77,4 +54,48 @@ func (s *Source) Next(ctx context.Context, img *jpeg.Image) error {
 		copy(dstSlice, srcSlice)
 	}
 	return nil
+}
+
+// Source of frames
+type ResumableSource struct {
+	Source
+	FramesPerSecond int
+	CancelFunc      func()
+}
+
+func (rs *ResumableSource) Start() error {
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	rs.CancelFunc = cancelFunc
+	go rs.Run(ctx, rs.FramesPerSecond)
+	return nil
+}
+
+func (rs *ResumableSource) Stop() {
+	rs.CancelFunc()
+}
+
+func New(fsys fs.FS, path string, fps int) (*ResumableSource, error) {
+	d := jpeg.NewDecompressor()
+	defer d.Free()
+
+	img := &jpeg.Image{}
+	defer img.Free()
+	feat, err := d.ReadFile(fsys, path, img)
+	if err != nil {
+		return nil, err
+	}
+	out := &jpeg.Image{}
+	features, err := d.Decompress(img, feat, out, jpeg.PF_RGBA, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ResumableSource{
+		Source: Source{
+			RawImage: out,
+			Features: features,
+			Stream:   make(chan *jpeg.Image),
+		},
+		FramesPerSecond: fps,
+	}, nil
 }

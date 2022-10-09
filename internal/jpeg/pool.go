@@ -419,17 +419,28 @@ func (farm *Farm) run(compressor Compressor, task farmTask) Compressor {
 type Pipeline struct {
 	rawPool  *rawPool
 	jpegPool *jpegPool
+	features RawFeatures
 	farm     *Farm
 }
 
-// New compressin pipeline
+// New creates a new compression pipeline.
+// A pipeline is only valid for a given set of RawFeatures,
+// because it must allocate buffers and the like.
+// It is also valid for a single combination of subsampling,
+// quality and flags, because images are encoded only once.
 // jpegPoolSize must be > rawPoolSize + farmSize`
 func New(rawPoolSize, jpegPoolSize, farmSize int, features RawFeatures, subsampling Subsampling, quality int, flags int) *Pipeline {
 	return &Pipeline{
 		rawPool:  newRawPool(rawPoolSize, features),
 		jpegPool: newJpegPool(jpegPoolSize, features),
+		features: features,
 		farm:     newFarm(farmSize, rawPoolSize, subsampling, quality, flags),
 	}
+}
+
+// Features returnts the Features with which the pipeline was created
+func (p *Pipeline) Features() RawFeatures {
+	return p.features
 }
 
 // Join and free all resources. All Sessions must be joined before this.
@@ -446,8 +457,10 @@ type Session struct {
 	jpegPool      *jpegPool
 }
 
-// Session starts a streaming session from the given Source
-func (pipeline *Pipeline) Session(ctx context.Context, source Source, features RawFeatures) *Session {
+// session starts a streaming session from the given Source.
+// The source MUST BE compatible with the RawFeatures with which the
+// pipeline was created.
+func (pipeline *Pipeline) session(ctx context.Context, source Source) *Session {
 	session := &Session{
 		currentFrame: 1, // 0 is reserved for closed stream
 		jpegPool:     pipeline.jpegPool,
@@ -464,7 +477,7 @@ func (pipeline *Pipeline) Session(ctx context.Context, source Source, features R
 			atomic.StoreUint64(&(session.currentFrame), 0)
 			session.jpegPool.Broadcast() // let all the readers notice
 		}()
-		for rawFrame := range pipeline.rawPool.stream(ctx, source, features) {
+		for rawFrame := range pipeline.rawPool.stream(ctx, source, pipeline.features) {
 			rawFrame := rawFrame // avoid aliasing the loop variable
 			atomic.StoreUint64(&(session.currentFrame), rawFrame.number)
 			session.pendingFrames.Add(1) // Will be flagged .Done() by compressor

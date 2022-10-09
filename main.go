@@ -8,7 +8,6 @@ package main
 import "C"
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -47,31 +46,15 @@ func abort(funcname string, err error) {
 }
 
 type fakeSessionManager struct {
-	Pipeline *jpeg.Pipeline
-	Source   *fakesource.Source
+	Manager *jpeg.SessionManager
 }
 
-type fakeSession struct {
-	session    *jpeg.Session
-	cancelFunc func()
+func (m fakeSessionManager) Acquire() (mjpeg.Session, error) {
+	return m.Manager.Acquire()
 }
 
-func (f fakeSession) Next(frameNumber uint64) (*jpeg.JpegFrame, uint64, jpeg.FrameStatus) {
-	return f.session.Next(frameNumber)
-}
-
-func (m fakeSessionManager) Acquire() mjpeg.Session {
-	ctx, cancelFunc := context.WithCancel(context.Background())
-	return fakeSession{
-		session:    m.Pipeline.Session(ctx, m.Source, m.Source.Features),
-		cancelFunc: cancelFunc,
-	}
-}
-
-func (m fakeSessionManager) Release(session mjpeg.Session) {
-	fullSession := session.(fakeSession)
-	fullSession.cancelFunc()
-	fullSession.session.Join()
+func (m fakeSessionManager) Done() {
+	m.Manager.Done()
 }
 
 func main() {
@@ -95,19 +78,18 @@ func main() {
 		C.GoString(apiVersion),
 	).Set(1)
 
-	fs, err := fakesource.New(os.DirFS("."), os.Args[1])
+	frames_per_second := 15
+	fs, err := fakesource.New(os.DirFS("."), os.Args[1], frames_per_second)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	frames_per_second := 15
-	fsm := fakeSessionManager{
-		Pipeline: jpeg.New(frames_per_second, 3*frames_per_second, 8, fs.Features, jpeg.TJSAMP_420, 95, 0),
-		Source:   fs,
-	}
-	go fsm.Source.Run(context.Background(), frames_per_second)
+	pipeline := jpeg.New(frames_per_second, 3*frames_per_second, 8, fs.Features, jpeg.TJSAMP_420, 95, 0)
+	manager := pipeline.Manage(fs)
+	defer manager.Join()
 
-	http.Handle("/mjpeg", mjpeg.Handler(fsm))
+	http.Handle("/mjpeg", mjpeg.Handler(fakeSessionManager{Manager: manager}))
+	http.Handle("/jpeg", jpeg.Handler(manager))
 	http.Handle("/metrics", promhttp.Handler())
 
 	fmt.Println("Listening on port :8080")

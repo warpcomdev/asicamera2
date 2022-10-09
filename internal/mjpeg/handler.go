@@ -18,8 +18,8 @@ type Session interface {
 }
 
 type SessionManager interface {
-	Acquire() Session
-	Release(Session)
+	Acquire() (Session, error)
+	Done()
 }
 
 // Track https://github.com/golang/go/issues/54136 for improvements on timeout handling
@@ -37,6 +37,13 @@ func Handler(mgr SessionManager) http.Handler {
 			return
 		}
 
+		session, err := mgr.Acquire()
+		if err != nil {
+			http.Error(w, "Acquiring session failed", http.StatusInternalServerError)
+			return
+		}
+		defer mgr.Done()
+
 		conn, rw, err := hijacker.Hijack()
 		if err != nil {
 			http.Error(w, "Hijacking failed", http.StatusMethodNotAllowed)
@@ -44,9 +51,6 @@ func Handler(mgr SessionManager) http.Handler {
 		}
 		defer conn.Close()
 		conn.SetDeadline(time.Now().Add(5 * time.Second)) // 5 seconds deadline to set the streaming up
-
-		session := mgr.Acquire()
-		defer mgr.Release(session)
 
 		// keep monitoring the conn while increasing the read deadline
 		keepAlive := make(chan struct{})
