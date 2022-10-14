@@ -13,6 +13,7 @@ import (
 // Source of frames
 type Source interface {
 	Next(ctx context.Context, img *Image) error // get next frame
+	Name() string                               // identifies the camera name
 }
 
 // --------------------------------
@@ -20,39 +21,54 @@ type Source interface {
 // --------------------------------
 
 var (
-	compressionTime = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name: "compression_latency",
-		Help: "JPEG Compression latency",
-		Buckets: []float64{
-			10, 30, 60, 120, 250, 500, 1000, 2500,
+	compressionTime = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "compression_latency",
+			Help: "JPEG Compression latency",
+			Buckets: []float64{
+				10, 30, 60, 120, 250, 500, 1000, 2500,
+			},
 		},
-	})
+		[]string{"camera"},
+	)
 
-	compressedSize = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name: "compressed_size",
-		Help: "Size of compressed frames",
-		Buckets: []float64{
-			16384, 65535, 262144, 524288, 1048576, 2097152, 4194304,
+	compressedSize = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "compressed_size",
+			Help: "Size of compressed frames",
+			Buckets: []float64{
+				16384, 65535, 262144, 524288, 1048576, 2097152, 4194304,
+			},
 		},
-	})
+		[]string{"camera"},
+	)
 
-	compressionStatus = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "compression_status",
-		Help: "Compression results by status",
-	}, []string{"status"})
-
-	streamingSessions = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "pipeline_sessions",
-		Help: "Accumulated number of sessions",
-	})
-
-	sessionDuration = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name: "pipeline_session_duration",
-		Help: "Pipeline session duration (seconds)",
-		Buckets: []float64{
-			1, 60, 1800, 7200, 28800,
+	compressionStatus = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "compression_status",
+			Help: "Compression results by status",
 		},
-	})
+		[]string{"camera", "status"},
+	)
+
+	streamingSessions = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pipeline_sessions",
+			Help: "Accumulated number of sessions",
+		},
+		[]string{"camera"},
+	)
+
+	sessionDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "pipeline_session_duration",
+			Help: "Pipeline session duration (seconds)",
+			Buckets: []float64{
+				1, 60, 1800, 7200, 28800,
+			},
+		},
+		[]string{"camera"},
+	)
 )
 
 // ---------------------------------
@@ -60,16 +76,16 @@ var (
 // for raw images.
 // ---------------------------------
 
-// rawPool manages raw image frames
-type rawPool struct {
+// Pool manages raw image frames
+type Pool struct {
 	freeList chan *Image
 	poolSize int
 	free     chan struct{} // closed by Free to shutdown the watchdog
 }
 
 // Setup the stream with initial buffers
-func newRawPool(poolSize int, features RawFeatures) *rawPool {
-	pool := &rawPool{
+func NewPool(poolSize int, features RawFeatures) *Pool {
+	pool := &Pool{
 		poolSize: poolSize,
 		freeList: make(chan *Image, poolSize),
 		free:     make(chan struct{}),
@@ -88,14 +104,16 @@ type rawFrame struct {
 	number   uint64
 	image    *Image      // input buffer
 	features RawFeatures // raw frame features
+	camera   string
 }
 
 // Stream a source through a rawFrame channel
-func (pool *rawPool) stream(ctx context.Context, source Source, features RawFeatures) chan rawFrame {
+func (pool *Pool) stream(ctx context.Context, source Source, features RawFeatures) chan rawFrame {
 	frames := make(chan rawFrame, pool.poolSize)
 	go func() {
 		defer close(frames)
 		var frameNumber uint64 = 1 // always skip frame 0
+		cameraName := source.Name()
 		for {
 			var srcImage *Image
 			var ok bool
@@ -115,6 +133,7 @@ func (pool *rawPool) stream(ctx context.Context, source Source, features RawFeat
 				number:   frameNumber,
 				image:    srcImage,
 				features: features,
+				camera:   cameraName,
 			}
 			select {
 			case <-ctx.Done():
@@ -129,7 +148,7 @@ func (pool *rawPool) stream(ctx context.Context, source Source, features RawFeat
 }
 
 // Monitors the free list
-func (pool *rawPool) watchdog() {
+func (pool *Pool) watchdog() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -155,7 +174,7 @@ func (pool *rawPool) watchdog() {
 }
 
 // Free all the resources of the pool
-func (pool *rawPool) Free() {
+func (pool *Pool) Free() {
 	close(pool.free) // stop the watchdog
 	// consume all freeList items
 	for i := 0; i < pool.poolSize; i++ {
@@ -318,7 +337,7 @@ type Farm struct {
 }
 
 // New compression pool
-func newFarm(farmSize, taskSize int, subsampling Subsampling, quality int, flags int) *Farm {
+func NewFarm(farmSize, taskSize int, subsampling Subsampling, quality int, flags int) *Farm {
 	farm := &Farm{
 		subsampling: subsampling,
 		quality:     quality,
@@ -337,7 +356,7 @@ func newFarm(farmSize, taskSize int, subsampling Subsampling, quality int, flags
 			for task := range farm.tasks {
 				start := time.Now()
 				compressor = farm.run(compressor, task)
-				compressionTime.Observe(float64(time.Since(start).Milliseconds()))
+				compressionTime.WithLabelValues(task.rawFrame.camera).Observe(float64(time.Since(start).Milliseconds()))
 			}
 		}()
 	}
@@ -372,7 +391,7 @@ func (farm *Farm) run(compressor Compressor, task farmTask) Compressor {
 	newStatus := FrameFailed
 	defer func() {
 		statusName := frameStatusNames[newStatus]
-		compressionStatus.WithLabelValues(statusName).Inc()
+		compressionStatus.WithLabelValues(task.rawFrame.camera, statusName).Inc()
 	}()
 	defer func() {
 		task.jpegPool.release(frameIndex, newStatus)
@@ -406,7 +425,7 @@ func (farm *Farm) run(compressor Compressor, task farmTask) Compressor {
 		compressor = NewCompressor()
 	} else {
 		newStatus = FrameReady
-		compressedSize.Observe(float64(frame.image.Size()))
+		compressedSize.WithLabelValues(task.rawFrame.camera).Observe(float64(frame.image.Size()))
 	}
 	return compressor
 }
@@ -417,7 +436,7 @@ func (farm *Farm) run(compressor Compressor, task farmTask) Compressor {
 // ------------------------------
 
 type Pipeline struct {
-	rawPool  *rawPool
+	rawPool  *Pool
 	jpegPool *jpegPool
 	features RawFeatures
 	farm     *Farm
@@ -429,12 +448,12 @@ type Pipeline struct {
 // It is also valid for a single combination of subsampling,
 // quality and flags, because images are encoded only once.
 // jpegPoolSize must be > rawPoolSize + farmSize`
-func New(rawPoolSize, jpegPoolSize, farmSize int, features RawFeatures, subsampling Subsampling, quality int, flags int) *Pipeline {
+func New(pool *Pool, farm *Farm, jpegPoolSize int, features RawFeatures) *Pipeline {
 	return &Pipeline{
-		rawPool:  newRawPool(rawPoolSize, features),
+		rawPool:  pool,
 		jpegPool: newJpegPool(jpegPoolSize, features),
 		features: features,
-		farm:     newFarm(farmSize, rawPoolSize, subsampling, quality, flags),
+		farm:     farm,
 	}
 }
 
@@ -445,9 +464,7 @@ func (p *Pipeline) Features() RawFeatures {
 
 // Join and free all resources. All Sessions must be joined before this.
 func (p *Pipeline) Join() {
-	p.farm.Stop()
 	p.jpegPool.Join()
-	p.rawPool.Free()
 }
 
 // Session keeps streaming from the Source until cancelled
@@ -469,11 +486,11 @@ func (pipeline *Pipeline) session(ctx context.Context, source Source) *Session {
 	start := time.Now()
 	go func() {
 		defer func() {
-			sessionDuration.Observe(time.Since(start).Seconds())
+			sessionDuration.WithLabelValues(source.Name()).Observe(time.Since(start).Seconds())
 		}()
 		defer session.pendingFrames.Done()
 		defer func() {
-			// Store frmae number 0 -> not running
+			// Store frame number 0 -> not running
 			atomic.StoreUint64(&(session.currentFrame), 0)
 			session.jpegPool.Broadcast() // let all the readers notice
 		}()
@@ -489,7 +506,7 @@ func (pipeline *Pipeline) session(ctx context.Context, source Source) *Session {
 			})
 		}
 	}()
-	streamingSessions.Inc()
+	streamingSessions.WithLabelValues(source.Name()).Inc()
 	return session
 }
 

@@ -12,7 +12,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
+
+	_ "net/http/pprof"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -57,6 +60,15 @@ func (m fakeSessionManager) Done() {
 	m.Manager.Done()
 }
 
+type namedSource struct {
+	*fakesource.ResumableSource
+	cameraName string
+}
+
+func (ns namedSource) Name() string {
+	return ns.cameraName
+}
+
 func main() {
 	fmt.Println("Entering program")
 
@@ -79,18 +91,42 @@ func main() {
 	).Set(1)
 
 	frames_per_second := 15
-	fs, err := fakesource.New(os.DirFS("."), os.Args[1], frames_per_second)
+	compressor_threads := 8
+
+	commonSource, err := fakesource.New(os.DirFS("."), os.Args[1], frames_per_second)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	pipeline := jpeg.New(frames_per_second, 3*frames_per_second, 8, fs.Features, jpeg.TJSAMP_420, 95, 0)
-	manager := pipeline.Manage(fs)
-	defer manager.Join()
+	pool := jpeg.NewPool(frames_per_second, commonSource.Features)
+	defer pool.Free()
+	farm := jpeg.NewFarm(compressor_threads, frames_per_second, jpeg.TJSAMP_420, 95, 0)
+	defer farm.Stop()
 
-	http.Handle("/mjpeg", mjpeg.Handler(fakeSessionManager{Manager: manager}))
-	http.Handle("/jpeg", jpeg.Handler(manager))
+	firstCamera := true
+	for idx, camera := range []string{"cam0", "cam1"} {
+		fs := namedSource{ResumableSource: commonSource, cameraName: camera}
+		pipeline := jpeg.New(pool, farm, 3*frames_per_second, fs.Features)
+		defer pipeline.Join()
+		manager := pipeline.Manage(fs)
+
+		mjpeg_handler := mjpeg.Handler(fakeSessionManager{Manager: manager})
+		http.Handle("/mjpeg/"+strconv.Itoa(idx), mjpeg_handler)
+		http.Handle("/mjpeg/"+camera, mjpeg_handler)
+
+		jpeg_handler := jpeg.Handler(manager)
+		http.Handle("/jpeg/"+strconv.Itoa(idx), jpeg_handler)
+		http.Handle("/jpeg/"+camera, jpeg_handler)
+
+		if firstCamera {
+			firstCamera = false
+			http.Handle("/mjpeg", mjpeg_handler)
+			http.Handle("/jpeg", jpeg_handler)
+		}
+	}
+
 	http.Handle("/metrics", promhttp.Handler())
+	http.Handle("/debug", http.DefaultServeMux)
 
 	fmt.Println("Listening on port :8080")
 	//Cannot set absolute timeout because mjpeg hander is streaming
