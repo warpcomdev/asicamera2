@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"time"
 
-	"github.com/warpcomdev/asicamera2/internal/jpeg"
+	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
 )
 
 // Source of frames

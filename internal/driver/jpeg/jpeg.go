@@ -1,8 +1,8 @@
 package jpeg
 
 /*
-#cgo CFLAGS:   -I${SRCDIR}/../../include
-#cgo LDFLAGS:  -L${SRCDIR}/../../lib -l:libjpeg.a -l:libturbojpeg.a -l:libjpeg.dll.a -l:libturbojpeg.dll.a
+#cgo CFLAGS:   -I${SRCDIR}/../../../include
+#cgo LDFLAGS:  -L${SRCDIR}/../../../lib -l:libjpeg.a -l:libturbojpeg.a -l:libjpeg.dll.a -l:libturbojpeg.dll.a
 #include "turbojpeg.h"
 
 int bytes_per_pixel(int mode) {

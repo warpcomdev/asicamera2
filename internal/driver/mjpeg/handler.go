@@ -10,7 +10,7 @@ import (
 	"net/textproto"
 	"time"
 
-	"github.com/warpcomdev/asicamera2/internal/jpeg"
+	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
 )
 
 type Session interface {

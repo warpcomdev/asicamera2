@@ -1,8 +1,8 @@
 package main
 
 /*
-#cgo CFLAGS:   -I${SRCDIR}/include
-#cgo LDFLAGS:  -L${SRCDIR}/lib -l:ASICamera2.lib
+#cgo CFLAGS:   -I${SRCDIR}/../../include
+#cgo LDFLAGS:  -L${SRCDIR}/../../lib -l:ASICamera2.lib
 #include "ASICamera2.h"
 */
 import "C"
@@ -21,9 +21,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/warpcomdev/asicamera2/internal/fakesource"
-	"github.com/warpcomdev/asicamera2/internal/jpeg"
-	"github.com/warpcomdev/asicamera2/internal/mjpeg"
+	"github.com/warpcomdev/asicamera2/internal/driver/fakesource"
+	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
+	"github.com/warpcomdev/asicamera2/internal/driver/mjpeg"
 )
 
 var (
