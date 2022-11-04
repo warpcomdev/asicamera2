@@ -1,12 +1,5 @@
 package main
 
-/*
-#cgo CFLAGS:   -I${SRCDIR}/../../include
-#cgo LDFLAGS:  -L${SRCDIR}/../../lib -l:ASICamera2.lib
-#include "ASICamera2.h"
-*/
-import "C"
-
 import (
 	"fmt"
 	"log"
@@ -14,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	"encoding/json"
 
 	_ "net/http/pprof"
 
@@ -24,6 +18,7 @@ import (
 	"github.com/warpcomdev/asicamera2/internal/driver/fakesource"
 	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
 	"github.com/warpcomdev/asicamera2/internal/driver/mjpeg"
+	"github.com/warpcomdev/asicamera2/internal/driver/camera"
 )
 
 var (
@@ -72,11 +67,29 @@ func (ns namedSource) Name() string {
 func main() {
 	fmt.Println("Entering program")
 
-	apiVersion, err := C.ASIGetSDKVersion()
+	apiVersion, err := camera.ApiVersion()
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("ASICamera2 SDK version %s\n", C.GoString(apiVersion))
+	fmt.Printf("ASICamera2 SDK version %s\n", apiVersion)
+
+	connectedCameras, err := camera.ConnectedCameras()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("Number of connected cameras %d\n", connectedCameras)
+
+	if connectedCameras > 0 {
+		info, err := camera.CameraInfo(0)
+		if err != nil {
+			panic(err)
+		}
+		data, err := json.MarshalIndent(info, "", "  ")
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(string(data))
+	}
 
 	if len(os.Args) <= 1 {
 		return
@@ -87,7 +100,7 @@ func main() {
 	startMetric.Set(float64(startTime.Unix()))
 	infoMetric.WithLabelValues(
 		startTime.Format(time.RFC3339),
-		C.GoString(apiVersion),
+		apiVersion,
 	).Set(1)
 
 	frames_per_second := 15
