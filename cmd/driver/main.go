@@ -67,24 +67,40 @@ func (ns namedSource) Name() string {
 func main() {
 	fmt.Println("Entering program")
 
-	apiVersion, err := camera.ApiVersion()
+	apiVersion, err := camera.ASIGetSDKVersion()
 	if err != nil {
 		panic(err)
 	}
 	fmt.Printf("ASICamera2 SDK version %s\n", apiVersion)
 
-	connectedCameras, err := camera.ConnectedCameras()
+	connectedCameras, err := camera.ASIGetNumOfConnectedCameras()
 	if err != nil {
 		panic(err)
 	}
 	fmt.Printf("Number of connected cameras %d\n", connectedCameras)
 
 	if connectedCameras > 0 {
-		info, err := camera.CameraInfo(0)
+		info, err := camera.ASIGetCameraProperty(0)
 		if err != nil {
 			panic(err)
 		}
 		data, err := json.MarshalIndent(info, "", "  ")
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(string(data))
+		if err := camera.ASIOpenCamera(info.CameraID); err != nil {
+			panic(err)
+		}
+		defer camera.ASICloseCamera(info.CameraID)
+		if err := camera.ASIInitCamera(info.CameraID); err != nil {
+			panic(err)
+		}
+		caps, err := camera.ASIGetControlCaps(info.CameraID)
+		if err != nil {
+			panic(err)
+		}
+		data, err = json.MarshalIndent(caps, "", "  ")
 		if err != nil {
 			panic(err)
 		}
