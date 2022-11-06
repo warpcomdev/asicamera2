@@ -121,7 +121,9 @@ func (rs *Source) Start(logger *zap.Logger) error {
 	if err != nil {
 		logger.Error("failed to get newest file", zap.Error(err))
 	} else {
-		rs.watcher.Updates <- newest
+		if err := rs.readImage(newest); err != nil {
+			logger.Error("failed to read file", zap.String("path", newest), zap.Error(err))
+		}
 	}
 	// Set frame rate and decompressor
 	rs.rate = time.NewTicker(time.Second)
