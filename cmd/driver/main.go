@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -114,7 +115,7 @@ func main() {
 		// 	Quality:     95,
 		// 	Flags:       0,
 		// })
-		commonSource, err := dirsource.New(logger, os.Args[1])
+		commonSource, err := dirsource.New(logger, os.Args[1], regexp.MustCompile(`\d{4}-\d{2}-\d{2}`))
 		if err != nil {
 			log.Fatal(err)
 		}

@@ -35,12 +35,12 @@ func (f frame) Compress(compressor jpeg.Compressor, target *jpeg.Image) (zero jp
 // Source of frames
 type Source struct {
 	// Path to image folder
-	root string
+	root  string
+	match Matcher
 	// Decompression resources
 	decompressor jpeg.Decompressor
 	images       [2]jpeg.Image
 	currentImage int
-
 	// Latest decompressed image
 	mutex      sync.Mutex
 	newestData frame
@@ -81,10 +81,13 @@ func (s *Source) Next(ctx context.Context, img *jpeg.Image) (jpeg.SrcFrame, erro
 
 func (rs *Source) Start(logger *zap.Logger) error {
 	var err error
-	rs.watcher, err = Start(logger, rs.root)
+	rs.watcher, err = Start(logger, rs.root, rs.match)
 	if err != nil {
 		return err
 	}
+	// Set frame rate and decompressor
+	rs.rate = time.NewTicker(time.Second)
+	rs.decompressor = jpeg.NewDecompressor()
 	// Start listener gopher for updates
 	go func(watcher *Watcher) {
 		latestFile := ""
@@ -117,7 +120,7 @@ func (rs *Source) Start(logger *zap.Logger) error {
 		}
 	}(rs.watcher)
 	// seed with newest file
-	newest, err := newestFile(logger, rs.root, []string{".jpg", ".jpeg"})
+	newest, err := newestFile(logger, rs.root, rs.match, []string{".jpg", ".jpeg"})
 	if err != nil {
 		logger.Error("failed to get newest file", zap.Error(err))
 	} else {
@@ -125,9 +128,6 @@ func (rs *Source) Start(logger *zap.Logger) error {
 			logger.Error("failed to read file", zap.String("path", newest), zap.Error(err))
 		}
 	}
-	// Set frame rate and decompressor
-	rs.rate = time.NewTicker(time.Second)
-	rs.decompressor = jpeg.NewDecompressor()
 	return nil
 }
 
@@ -166,6 +166,9 @@ func (rs *Source) Stop() {
 	rs.images[1].Free()
 }
 
-func New(logger *zap.Logger, root string) (*Source, error) {
-	return &Source{root: root}, nil
+func New(logger *zap.Logger, root string, match Matcher) (*Source, error) {
+	return &Source{
+		root:  root,
+		match: match,
+	}, nil
 }

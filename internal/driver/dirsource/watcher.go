@@ -18,7 +18,12 @@ type Watcher struct {
 	folders map[string]bool
 }
 
-func Start(logger *zap.Logger, root string) (*Watcher, error) {
+// Matcher checks whether a folder name should be watched
+type Matcher interface {
+	MatchString(string) bool
+}
+
+func Start(logger *zap.Logger, root string, match Matcher) (*Watcher, error) {
 	var (
 		w   Watcher
 		err error
@@ -28,16 +33,16 @@ func Start(logger *zap.Logger, root string) (*Watcher, error) {
 		return nil, err
 	}
 	w.folders = make(map[string]bool)
-	if err := w.rescan(logger, root); err != nil {
+	if err := w.rescan(logger, root, match); err != nil {
 		w.watcher.Close()
 		return nil, err
 	}
 	w.Updates = make(chan string, 1)
-	go w.watch(logger, root)
+	go w.watch(logger, root, match)
 	return &w, nil
 }
 
-func (w *Watcher) add(logger *zap.Logger, path string) error {
+func (w *Watcher) add(logger *zap.Logger, path string, match Matcher) error {
 	// Read directorios and add to watcher
 	subdirs, err := os.ReadDir(path)
 	if err != nil {
@@ -52,11 +57,15 @@ func (w *Watcher) add(logger *zap.Logger, path string) error {
 	w.folders[path] = true
 	// Try to add all subdirs
 	for _, subdir := range subdirs {
-		if strings.HasPrefix(subdir.Name(), ".") || !subdir.IsDir() {
+		subdirName := subdir.Name()
+		if strings.HasPrefix(subdirName, ".") || !subdir.IsDir() {
+			continue
+		}
+		if !match.MatchString(subdirName) {
 			continue
 		}
 		fullPath := filepath.Join(path, subdir.Name())
-		if err := w.add(logger, fullPath); err != nil {
+		if err := w.add(logger, fullPath, match); err != nil {
 			return err
 		}
 	}
@@ -67,12 +76,12 @@ func (w *Watcher) Close() error {
 	return w.watcher.Close()
 }
 
-func (w *Watcher) rescan(logger *zap.Logger, root string) error {
+func (w *Watcher) rescan(logger *zap.Logger, root string, match Matcher) error {
 	// Set all folders to false and add again
 	for path := range w.folders {
 		w.folders[path] = false
 	}
-	if err := w.add(logger, root); err != nil {
+	if err := w.add(logger, root, match); err != nil {
 		return err
 	}
 	// Locate all folders still false
@@ -100,7 +109,7 @@ func (w *Watcher) rescan(logger *zap.Logger, root string) error {
 }
 
 // Watch folder and subfolders
-func (w *Watcher) watch(logger *zap.Logger, root string) {
+func (w *Watcher) watch(logger *zap.Logger, root string, match Matcher) {
 	defer close(w.Updates)
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -108,7 +117,7 @@ func (w *Watcher) watch(logger *zap.Logger, root string) {
 		select {
 		case <-ticker.C:
 			// Rescan every five minutes, in case we miss some directory
-			if err := w.rescan(logger, root); err != nil {
+			if err := w.rescan(logger, root, match); err != nil {
 				logger.Error("rescan failed", zap.Error(err))
 			}
 		case event, ok := <-w.watcher.Events:
@@ -154,7 +163,7 @@ func (w *Watcher) watch(logger *zap.Logger, root string) {
 	}
 }
 
-func newestFile(logger *zap.Logger, root string, extensions []string) (string, error) {
+func newestFile(logger *zap.Logger, root string, dirMatch Matcher, fileExt []string) (string, error) {
 	// Locate newest File
 	var (
 		newestPath string
@@ -168,15 +177,22 @@ func newestFile(logger *zap.Logger, root string, extensions []string) (string, e
 		if d.IsDir() {
 			return nil
 		}
-		lower := strings.ToLower(path)
-		match := false
-		for _, ext := range extensions {
+		parts := filepath.SplitList(path)
+		numParts := len(parts)
+		if numParts > 1 {
+			if !dirMatch.MatchString(parts[numParts-2]) {
+				return nil
+			}
+		}
+		lower := strings.ToLower(parts[numParts-1])
+		valid := false
+		for _, ext := range fileExt {
 			if strings.HasSuffix(lower, ext) {
-				match = true
+				valid = true
 				break
 			}
 		}
-		if !match {
+		if !valid {
 			return nil
 		}
 		info, err := d.Info()
