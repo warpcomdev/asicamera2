@@ -17,81 +17,81 @@ import (
 )
 
 var (
-	asiGetNumOfConnectedCameras = promauto.NewCounterVec(
+	callASIGetNumOfConnectedCameras = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "asiGetNumOfConnectedCameras",
+			Name: "call_ASIGetNumOfConnectedCameras",
 			Help: "Calls to asiGetNumOfConnectedCameras by result code",
 		},
 		[]string{"code"},
 	)
 
-	asiGetCameraProperty = promauto.NewCounterVec(
+	callASIGetCameraProperty = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "asiGetCameraProperty",
+			Name: "call_ASIGetCameraProperty",
 			Help: "Calls to asiGetCameraProperty by result code",
 		},
 		[]string{"camera", "code"},
 	)
 
-	asiOpenCamera = promauto.NewCounterVec(
+	callASIOpenCamera = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "asiOpenCamera",
+			Name: "call_ASIOpenCamera",
 			Help: "Calls to asiOpenCamera by result code",
 		},
 		[]string{"camera", "code"},
 	)
 
-	asiCloseCamera = promauto.NewCounterVec(
+	callASICloseCamera = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "asiCloseCamera",
+			Name: "call_ASICloseCamera",
 			Help: "Calls to asiCloseCamera by result code",
 		},
 		[]string{"camera", "code"},
 	)
 
-	asiGetControlCaps = promauto.NewCounterVec(
+	callASIGetControlCaps = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "asiGetControlCaps",
+			Name: "call_ASIGetControlCaps",
 			Help: "Calls to asiGetControlCaps by result code",
 		},
 		[]string{"camera", "code"},
 	)
 
-	asiGetControlValue = promauto.NewCounterVec(
+	callASIGetControlValue = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "asiGetControlValue",
+			Name: "call_ASIGetControlValue",
 			Help: "Calls to asiGetControlValue by result code",
 		},
 		[]string{"camera", "caps", "code"},
 	)
 
-	asiGetDroppedFrames = promauto.NewCounterVec(
+	callASIGetDroppedFrames = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "asiGetDroppedFrames",
+			Name: "call_ASIGetDroppedFrames",
 			Help: "Calls to asiGetDroppedFrames by result code",
 		},
 		[]string{"camera", "code"},
 	)
 
-	asiGetID = promauto.NewCounterVec(
+	callASIGetID = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "asiGetID",
+			Name: "call_ASIGetID",
 			Help: "Calls to asiGetID by result code",
 		},
 		[]string{"camera", "code"},
 	)
 
-	asiGetSerialNumber = promauto.NewCounterVec(
+	callASIGetSerialNumber = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "asiGetSerialNumber",
+			Name: "call_ASIGetSerialNumber",
 			Help: "Calls to asiGetSerialNumber by result code",
 		},
 		[]string{"camera", "code"},
 	)
 
-	asiGetGainOffset = promauto.NewCounterVec(
+	callASIGetGainOffset = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "asiGetGainOffset",
+			Name: "call_ASIGetGainOffset",
 			Help: "Calls to asiGetGainOffset by result code",
 		},
 		[]string{"camera", "code"},
@@ -301,9 +301,9 @@ func ASIGetNumOfConnectedCameras() (int, error) {
 	if err != nil {
 		code = err.Error()
 	} else {
-		code = ASI_ERROR_CODE(c).String()
+		code = ASI_SUCCESS.String()
 	}
-	asiGetNumOfConnectedCameras.WithLabelValues(code).Inc()
+	callASIGetNumOfConnectedCameras.WithLabelValues(code).Inc()
 	return int(c), err
 }
 
@@ -329,14 +329,53 @@ type ASI_CAMERA_INFO struct {
 	IsTriggerCam      ASI_BOOL
 }
 
-func ASIGetCameraProperty(index int) (info ASI_CAMERA_INFO, err error) {
+func asiOpenCamera(iCameraID int, label string) error {
+	retcode, err := C.ASIOpenCamera(C.int(iCameraID))
+	if err != nil {
+		callASIOpenCamera.WithLabelValues(label, err.Error()).Inc()
+		return err
+	}
+	callASIOpenCamera.WithLabelValues(label, ASI_ERROR_CODE(retcode).String()).Inc()
+	if retcode != 0 {
+		return ASI_ERROR_CODE(retcode)
+	}
+	return nil
+}
+
+/* Only for capturing video
+func ASIInitCamera(iCameraID int) error {
+	retcode, err := C.ASIInitCamera(C.int(iCameraID))
+	if err != nil {
+		return err
+	}
+	if retcode != 0 {
+		return ASI_ERROR_CODE(retcode)
+	}
+	return nil
+}
+*/
+
+func asiCloseCamera(iCameraID int, label string) error {
+	retcode, err := C.ASICloseCamera(C.int(iCameraID))
+	if err != nil {
+		callASICloseCamera.WithLabelValues(label, err.Error()).Inc()
+		return err
+	}
+	callASICloseCamera.WithLabelValues(label, ASI_ERROR_CODE(retcode).String()).Inc()
+	if retcode != 0 {
+		return ASI_ERROR_CODE(retcode)
+	}
+	return nil
+}
+
+func asiGetCameraProperty(index int) (info ASI_CAMERA_INFO, err error) {
 	w, err := C.wrap_ASIGetCameraProperty(C.int(index))
 	if err != nil {
-		asiGetCameraProperty.WithLabelValues(strconv.Itoa(index), err.Error()).Inc()
+		callASIGetCameraProperty.WithLabelValues(strconv.Itoa(index), err.Error()).Inc()
 		return info, err
 	}
 	if w.retcode != 0 {
-		asiGetCameraProperty.WithLabelValues(strconv.Itoa(index), ASI_ERROR_CODE(w.retcode).String()).Inc()
+		callASIGetCameraProperty.WithLabelValues(strconv.Itoa(index), ASI_ERROR_CODE(w.retcode).String()).Inc()
 		return info, ASI_ERROR_CODE(w.retcode)
 	}
 	info.Name = C.GoString(&(w.info.Name[0]))
@@ -370,7 +409,6 @@ func ASIGetCameraProperty(index int) (info ASI_CAMERA_INFO, err error) {
 		}
 		info.SupportedVideoFormat = append(info.SupportedVideoFormat, vf)
 	}
-	asiGetCameraProperty.WithLabelValues(strconv.Itoa(info.CameraID), ASI_ERROR_CODE(w.retcode).String()).Inc()
 	return info, err
 }
 
@@ -471,52 +509,13 @@ type ASI_ID struct {
 	ID [8]byte
 }
 
-func ASIOpenCamera(iCameraID int) error {
-	retcode, err := C.ASIOpenCamera(C.int(iCameraID))
-	if err != nil {
-		asiOpenCamera.WithLabelValues(strconv.Itoa(iCameraID), err.Error()).Inc()
-		return err
-	}
-	asiOpenCamera.WithLabelValues(strconv.Itoa(iCameraID), ASI_ERROR_CODE(retcode).String()).Inc()
-	if retcode != 0 {
-		return ASI_ERROR_CODE(retcode)
-	}
-	return nil
-}
-
-/* Only for capturing video
-func ASIInitCamera(iCameraID int) error {
-	retcode, err := C.ASIInitCamera(C.int(iCameraID))
-	if err != nil {
-		return err
-	}
-	if retcode != 0 {
-		return ASI_ERROR_CODE(retcode)
-	}
-	return nil
-}
-*/
-
-func ASICloseCamera(iCameraID int) error {
-	retcode, err := C.ASICloseCamera(C.int(iCameraID))
-	if err != nil {
-		asiCloseCamera.WithLabelValues(strconv.Itoa(iCameraID), err.Error()).Inc()
-		return err
-	}
-	asiCloseCamera.WithLabelValues(strconv.Itoa(iCameraID), ASI_ERROR_CODE(retcode).String()).Inc()
-	if retcode != 0 {
-		return ASI_ERROR_CODE(retcode)
-	}
-	return nil
-}
-
-func ASIGetControlCaps(iCameraID int) ([]ASI_CONTROL_CAPS, error) {
+func asiGetControlCaps(iCameraID int, label string) ([]ASI_CONTROL_CAPS, error) {
 	wrapper, err := C.wrap_ASIGetControlCaps(C.int(iCameraID))
 	if err != nil {
-		defer asiGetControlCaps.WithLabelValues(strconv.Itoa(iCameraID), err.Error()).Inc()
+		callASIGetControlCaps.WithLabelValues(label, err.Error()).Inc()
 		return nil, err
 	}
-	asiGetControlCaps.WithLabelValues(strconv.Itoa(iCameraID), ASI_ERROR_CODE(wrapper.retcode).String()).Inc()
+	callASIGetControlCaps.WithLabelValues(label, ASI_ERROR_CODE(wrapper.retcode).String()).Inc()
 	if wrapper.retcode != 0 {
 		return nil, ASI_ERROR_CODE(wrapper.retcode)
 	}
@@ -540,15 +539,15 @@ func ASIGetControlCaps(iCameraID int) ([]ASI_CONTROL_CAPS, error) {
 	return controls, nil
 }
 
-func ASIGetControlValue(iCameraID int, controlType ASI_CONTROL_TYPE) (plValue int, pbAuto ASI_BOOL, err error) {
+func asiGetControlValue(iCameraID int, label string, controlType ASI_CONTROL_TYPE) (plValue int, pbAuto ASI_BOOL, err error) {
 	var value C.long
 	var auto C.int
 	retcode, err := C.ASIGetControlValue(C.int(iCameraID), C.int(controlType), &value, &auto)
 	if err != nil {
-		asiGetControlValue.WithLabelValues(strconv.Itoa(iCameraID), controlType.String(), err.Error()).Inc()
+		callASIGetControlValue.WithLabelValues(label, controlType.String(), err.Error()).Inc()
 		return plValue, pbAuto, err
 	}
-	asiGetControlValue.WithLabelValues(strconv.Itoa(iCameraID), controlType.String(), ASI_ERROR_CODE(retcode).String()).Inc()
+	callASIGetControlValue.WithLabelValues(label, controlType.String(), ASI_ERROR_CODE(retcode).String()).Inc()
 	if retcode != 0 {
 		return plValue, pbAuto, ASI_ERROR_CODE(retcode)
 	}
@@ -568,28 +567,28 @@ func ASISetControlValue(iCameraID int, controlType ASI_CONTROL_TYPE, plValue int
 }
 */
 
-func ASIGetDroppedFrames(iCameraID int) (int, error) {
+func asiGetDroppedFrames(iCameraID int, label string) (int, error) {
 	var frames C.int
 	retcode, err := C.ASIGetDroppedFrames(C.int(iCameraID), &frames)
 	if err != nil {
-		defer asiGetDroppedFrames.WithLabelValues(strconv.Itoa(iCameraID), err.Error()).Inc()
+		callASIGetDroppedFrames.WithLabelValues(label, err.Error()).Inc()
 		return 0, err
 	}
-	asiGetDroppedFrames.WithLabelValues(strconv.Itoa(iCameraID), ASI_ERROR_CODE(retcode).String()).Inc()
+	callASIGetDroppedFrames.WithLabelValues(label, ASI_ERROR_CODE(retcode).String()).Inc()
 	if retcode != 0 {
 		return 0, ASI_ERROR_CODE(retcode)
 	}
 	return int(frames), nil
 }
 
-func ASIGetID(iCameraID int) (id [8]byte, err error) {
+func asiGetID(iCameraID int) (id [8]byte, err error) {
 	var asid C.ASI_ID
 	retcode, err := C.ASIGetID(C.int(iCameraID), &asid)
 	if err != nil {
-		defer asiGetID.WithLabelValues(strconv.Itoa(iCameraID), err.Error()).Inc()
+		callASIGetID.WithLabelValues(strconv.Itoa(iCameraID), err.Error()).Inc()
 		return id, err
 	}
-	asiGetID.WithLabelValues(strconv.Itoa(iCameraID), ASI_ERROR_CODE(retcode).String()).Inc()
+	callASIGetID.WithLabelValues(strconv.Itoa(iCameraID), ASI_ERROR_CODE(retcode).String()).Inc()
 	if retcode != 0 {
 		return id, ASI_ERROR_CODE(retcode)
 	}
@@ -599,14 +598,14 @@ func ASIGetID(iCameraID int) (id [8]byte, err error) {
 	return id, nil
 }
 
-func ASIGetSerialNumber(iCameraID int) (sn [8]byte, err error) {
+func asiGetSerialNumber(iCameraID int) (sn [8]byte, err error) {
 	var asid C.ASI_SN
 	retcode, err := C.ASIGetSerialNumber(C.int(iCameraID), &asid)
 	if err != nil {
-		asiGetSerialNumber.WithLabelValues(strconv.Itoa(iCameraID), err.Error()).Inc()
+		callASIGetSerialNumber.WithLabelValues(strconv.Itoa(iCameraID), err.Error()).Inc()
 		return sn, err
 	}
-	asiGetSerialNumber.WithLabelValues(strconv.Itoa(iCameraID), ASI_ERROR_CODE(retcode).String()).Inc()
+	callASIGetSerialNumber.WithLabelValues(strconv.Itoa(iCameraID), ASI_ERROR_CODE(retcode).String()).Inc()
 	if retcode != 0 {
 		return sn, ASI_ERROR_CODE(retcode)
 	}
@@ -616,14 +615,14 @@ func ASIGetSerialNumber(iCameraID int) (sn [8]byte, err error) {
 	return sn, nil
 }
 
-func ASIGetGainOffset(iCameraID int) (pOffset_HighestDR, pOffset_UnityGain, pGain_LowestRN, pOffset_LowestRN int, err error) {
+func asiGetGainOffset(iCameraID int, label string) (pOffset_HighestDR, pOffset_UnityGain, pGain_LowestRN, pOffset_LowestRN int, err error) {
 	var p1, p2, p3, p4 C.int
 	retcode, err := C.ASIGetGainOffset(C.int(iCameraID), &p1, &p2, &p3, &p4)
 	if err != nil {
-		asiGetGainOffset.WithLabelValues(strconv.Itoa(iCameraID), err.Error()).Inc()
+		callASIGetGainOffset.WithLabelValues(label, err.Error()).Inc()
 		return 0, 0, 0, 0, err
 	}
-	defer asiGetGainOffset.WithLabelValues(strconv.Itoa(iCameraID), ASI_ERROR_CODE(retcode).String()).Inc()
+	defer callASIGetGainOffset.WithLabelValues(label, ASI_ERROR_CODE(retcode).String()).Inc()
 	if retcode != 0 {
 		return 0, 0, 0, 0, ASI_ERROR_CODE(retcode)
 	}

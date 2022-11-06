@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -39,10 +40,6 @@ var (
 	)
 )
 
-func abort(funcname string, err error) {
-	panic(fmt.Sprintf("%s failed: %v", funcname, err))
-}
-
 type fakeSessionManager struct {
 	Manager *jpeg.SessionManager
 }
@@ -80,24 +77,17 @@ func main() {
 	fmt.Printf("Number of connected cameras %d\n", connectedCameras)
 
 	if connectedCameras > 0 {
-		info, err := camera.ASIGetCameraProperty(0)
+		info, err := camera.New(0, 5*time.Minute)
 		if err != nil {
 			panic(err)
 		}
-		data, err := json.MarshalIndent(info, "", "  ")
+		defer info.Join()
+		data, err := json.MarshalIndent(info.ASI_CAMERA_INFO, "", "  ")
 		if err != nil {
 			panic(err)
 		}
 		fmt.Println(string(data))
-		if err := camera.ASIOpenCamera(info.CameraID); err != nil {
-			panic(err)
-		}
-		defer camera.ASICloseCamera(info.CameraID)
-		// Only for video capturing
-		// if err := camera.ASIInitCamera(info.CameraID); err != nil {
-		// 	panic(err)
-		// }
-		caps, err := camera.ASIGetControlCaps(info.CameraID)
+		caps, err := info.ASIGetControlCaps()
 		if err != nil {
 			panic(err)
 		}
@@ -105,11 +95,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+		go info.Monitor(context.Background(), 30*time.Second)
 		fmt.Println(string(data))
-	}
-
-	if len(os.Args) <= 1 {
-		return
 	}
 
 	// Register startup metrics
@@ -123,36 +110,39 @@ func main() {
 	frames_per_second := 15
 	compressor_threads := 8
 
-	commonSource, err := fakesource.New(os.DirFS("."), os.Args[1], frames_per_second)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	pool := jpeg.NewPool(frames_per_second, commonSource.Features)
-	defer pool.Free()
-	farm := jpeg.NewFarm(compressor_threads, frames_per_second, jpeg.TJSAMP_420, 95, 0)
-	defer farm.Stop()
-
-	firstCamera := true
-	for idx, camera := range []string{"cam0", "cam1"} {
-		fs := namedSource{ResumableSource: commonSource, cameraName: camera}
-		pipeline := jpeg.New(pool, farm, 3*frames_per_second, fs.Features)
-		defer pipeline.Join()
-		manager := pipeline.Manage(fs)
-
-		mjpeg_handler := mjpeg.Handler(fakeSessionManager{Manager: manager})
-		http.Handle("/mjpeg/"+strconv.Itoa(idx), mjpeg_handler)
-		http.Handle("/mjpeg/"+camera, mjpeg_handler)
-
-		jpeg_handler := jpeg.Handler(manager)
-		http.Handle("/jpeg/"+strconv.Itoa(idx), jpeg_handler)
-		http.Handle("/jpeg/"+camera, jpeg_handler)
-
-		if firstCamera {
-			firstCamera = false
-			http.Handle("/mjpeg", mjpeg_handler)
-			http.Handle("/jpeg", jpeg_handler)
+	if len(os.Args) > 1 {
+		commonSource, err := fakesource.New(os.DirFS("."), os.Args[1], frames_per_second)
+		if err != nil {
+			log.Fatal(err)
 		}
+
+		pool := jpeg.NewPool(frames_per_second, commonSource.Features)
+		defer pool.Free()
+		farm := jpeg.NewFarm(compressor_threads, frames_per_second, jpeg.TJSAMP_420, 95, 0)
+		defer farm.Stop()
+
+		firstCamera := true
+		for idx, camera := range []string{"cam0", "cam1"} {
+			fs := namedSource{ResumableSource: commonSource, cameraName: camera}
+			pipeline := jpeg.New(pool, farm, 3*frames_per_second, fs.Features)
+			defer pipeline.Join()
+			manager := pipeline.Manage(fs)
+
+			mjpeg_handler := mjpeg.Handler(fakeSessionManager{Manager: manager})
+			http.Handle("/mjpeg/"+strconv.Itoa(idx), mjpeg_handler)
+			http.Handle("/mjpeg/"+camera, mjpeg_handler)
+
+			jpeg_handler := jpeg.Handler(manager)
+			http.Handle("/jpeg/"+strconv.Itoa(idx), jpeg_handler)
+			http.Handle("/jpeg/"+camera, jpeg_handler)
+
+			if firstCamera {
+				firstCamera = false
+				http.Handle("/mjpeg", mjpeg_handler)
+				http.Handle("/jpeg", jpeg_handler)
+			}
+		}
+
 	}
 
 	http.Handle("/metrics", promhttp.Handler())
