@@ -154,7 +154,7 @@ func (w *Watcher) watch(logger *zap.Logger, root string) {
 	}
 }
 
-func newestFile(logger *zap.Logger, root string) (string, error) {
+func newestFile(logger *zap.Logger, root string, extensions []string) (string, error) {
 	// Locate newest File
 	var (
 		newestPath string
@@ -165,17 +165,28 @@ func newestFile(logger *zap.Logger, root string) (string, error) {
 			logger.Error("failed to walk path", zap.String("path", path), zap.Error(err))
 			return err
 		}
-		if !d.IsDir() {
-			info, err := d.Info()
-			if err != nil {
-				logger.Error("failed to stat file", zap.String("path", path), zap.Error(err))
-			} else {
-				modTime := info.ModTime()
-				if modTime.After(newestTime) {
-					newestPath = path
-					newestTime = modTime
-				}
+		if d.IsDir() {
+			return nil
+		}
+		lower := strings.ToLower(path)
+		match := false
+		for _, ext := range extensions {
+			if strings.HasSuffix(lower, ext) {
+				match = true
+				break
 			}
+		}
+		if !match {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		modTime := info.ModTime()
+		if modTime.After(newestTime) {
+			newestPath = path
+			newestTime = modTime
 		}
 		return nil
 	})

@@ -3,9 +3,9 @@ package dirsource
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,14 +38,12 @@ type Source struct {
 	root string
 	// Decompression resources
 	decompressor jpeg.Decompressor
-	image        jpeg.Image
+	images       [2]jpeg.Image
+	currentImage int
+
 	// Latest decompressed image
-	mutex       sync.Mutex
-	currentPath string
-	currentDate time.Time
-	newestPath  string
-	newestDate  time.Time
-	newestData  frame
+	mutex      sync.Mutex
+	newestData frame
 	// frame rate
 	watcher *Watcher
 	rate    *time.Ticker
@@ -60,29 +58,20 @@ func (s *Source) Next(ctx context.Context, img *jpeg.Image) (jpeg.SrcFrame, erro
 	for {
 		select {
 		case <-s.rate.C:
-			s.mutex.Lock()
-			currentPath, newestPath := s.currentPath, s.newestPath
-			currentDate, newestDate := s.currentDate, s.newestDate
-			s.mutex.Unlock()
-			if currentPath != newestPath || newestDate.After(currentDate) {
-				dirname, filename := filepath.Split(newestPath)
-				fsys := os.DirFS(dirname)
-				features, err := jpeg.Decompressor.ReadFile(s.decompressor, fsys, filename, &s.image)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read file %s: %w", s.newestPath, err)
-				}
-				s.newestData = frame{
-					src:      &s.image,
-					img:      img,
-					features: features,
-				}
+			frame := func() jpeg.SrcFrame {
 				s.mutex.Lock()
-				s.currentPath = s.newestPath
-				s.currentDate = s.newestDate
-				s.mutex.Unlock()
-			}
-			if s.image.Size() > 0 {
-				return s.newestData, nil
+				defer s.mutex.Unlock()
+				if s.images[s.currentImage].Size() <= 0 {
+					return nil
+				}
+				return frame{
+					src:      &s.images[s.currentImage],
+					img:      img,
+					features: s.newestData.features,
+				}
+			}()
+			if frame != nil {
+				return frame, nil
 			}
 		case <-ctx.Done():
 			return nil, errors.New("context cancelled")
@@ -98,22 +87,37 @@ func (rs *Source) Start(logger *zap.Logger) error {
 	}
 	// Start listener gopher for updates
 	go func(watcher *Watcher) {
+		latestFile := ""
 		for path := range watcher.Updates {
 			info, err := os.Stat(path)
 			if err != nil {
 				logger.Error("failed to stat file", zap.String("path", path), zap.Error(err))
-			} else {
-				func() {
-					rs.mutex.Lock()
-					defer rs.mutex.Unlock()
-					rs.newestPath = path
-					rs.newestDate = info.ModTime()
-				}()
+				continue
 			}
+			if info.IsDir() {
+				continue
+			}
+			lower := strings.ToLower(path)
+			if !strings.HasSuffix(lower, ".jpg") && !strings.HasSuffix(lower, ".jpeg") {
+				continue
+			}
+			// Do not send the same file several times in a row
+			if path == latestFile {
+				continue
+			}
+			// Introduce a bit of dalay before reading the file,
+			// because we don't want to read before the software has finished writing
+			go func(path string) {
+				<-time.After(5 * time.Second)
+				if err := rs.readImage(path); err != nil {
+					logger.Error("failed to refresh image", zap.String("path", path), zap.Error(err))
+				}
+			}(path)
+			latestFile = path
 		}
 	}(rs.watcher)
 	// seed with newest file
-	newest, err := newestFile(logger, rs.root)
+	newest, err := newestFile(logger, rs.root, []string{".jpg", ".jpeg"})
 	if err != nil {
 		logger.Error("failed to get newest file", zap.Error(err))
 	} else {
@@ -122,6 +126,24 @@ func (rs *Source) Start(logger *zap.Logger) error {
 	// Set frame rate and decompressor
 	rs.rate = time.NewTicker(time.Second)
 	rs.decompressor = jpeg.NewDecompressor()
+	return nil
+}
+
+func (rs *Source) readImage(path string) error {
+	dirname, filename := filepath.Split(path)
+	fsys := os.DirFS(dirname)
+	imgIndex := 1 - rs.currentImage
+	features, err := jpeg.Decompressor.ReadFile(rs.decompressor, fsys, filename, &rs.images[imgIndex])
+	if err != nil {
+		return err
+	}
+	rs.mutex.Lock()
+	defer rs.mutex.Unlock()
+	rs.currentImage = imgIndex
+	rs.newestData = frame{
+		src:      &rs.images[rs.currentImage],
+		features: features,
+	}
 	return nil
 }
 
@@ -138,7 +160,8 @@ func (rs *Source) Stop() {
 	// Free frame rate and decompressor
 	rs.rate.Stop()
 	rs.decompressor.Free()
-	rs.image.Free()
+	rs.images[0].Free()
+	rs.images[1].Free()
 }
 
 func New(logger *zap.Logger, root string) (*Source, error) {
