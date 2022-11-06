@@ -29,4 +29,19 @@ typedef struct control_wrapper {
 control_wrapper wrap_ASIGetControlCaps(int camera_id);
 void free_control_wrapper(control_wrapper w);
 
+// Helps building a linked list to pass to golang
+typedef struct ppid_list {
+	int info;
+	struct ppid_list *next;
+} ppid_list;
+
+typedef struct ppid_wrapper {
+	ppid_list *alloc;
+	int control_num;
+	int retcode;
+} ppid_wrapper;
+
+ppid_wrapper wrap_ASIGetProductIDs();
+void free_ppid_wrapper(ppid_wrapper w);
+
 #endif // __CAMERA_H

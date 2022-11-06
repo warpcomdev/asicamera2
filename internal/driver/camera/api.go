@@ -393,20 +393,20 @@ func ASIGetControlCaps(iCameraID int) ([]ASI_CONTROL_CAPS, error) {
 	}
 	defer C.free_control_wrapper(wrapper);
 	controls := make([]ASI_CONTROL_CAPS, 0, int(wrapper.control_num))
-	next := wrapper.alloc
+	curr := wrapper.alloc
 	for i := 0; i < int(wrapper.control_num); i++ {
 		control := ASI_CONTROL_CAPS {
-			Name: C.GoString(&(next.info.Name[0])),
-			Description: C.GoString(&(next.info.Description[0])),
-			MaxValue: int(next.info.MaxValue),
-			MinValue: int(next.info.MinValue),
-			DefaultValue: int(next.info.DefaultValue),
-			IsAutoSupported: ASI_BOOL(next.info.IsAutoSupported),
-			IsWritable: ASI_BOOL(next.info.IsWritable),
-			ControlType: ASI_CONTROL_TYPE(next.info.ControlType),
+			Name: C.GoString(&(curr.info.Name[0])),
+			Description: C.GoString(&(curr.info.Description[0])),
+			MaxValue: int(curr.info.MaxValue),
+			MinValue: int(curr.info.MinValue),
+			DefaultValue: int(curr.info.DefaultValue),
+			IsAutoSupported: ASI_BOOL(curr.info.IsAutoSupported),
+			IsWritable: ASI_BOOL(curr.info.IsWritable),
+			ControlType: ASI_CONTROL_TYPE(curr.info.ControlType),
 		}
 		controls = append(controls, control)
-		next = next.next
+		curr = curr.next
 	}
 	return controls, nil
 }
@@ -433,4 +433,80 @@ func ASISetControlValue(iCameraID int, controlType ASI_CONTROL_TYPE, plValue int
 		return ASI_ERROR_CODE(retcode)
 	}
 	return nil
+}
+
+func ASIGetProductIDs() ([]int, error) {
+	wrapper, err := C.wrap_ASIGetProductIDs()
+	if err != nil {
+		return nil, err
+	}
+	if wrapper.retcode != 0 {
+		return nil, ASI_ERROR_CODE(wrapper.retcode)
+	}
+	defer C.free_ppid_wrapper(wrapper)
+	ppids := make([]int, 0, wrapper.control_num)
+	curr := wrapper.alloc
+	for i := 0; i < int(wrapper.control_num); i++ {
+		ppids = append(ppids, int(curr.info))
+		curr = curr.next
+	}
+	return ppids, nil
+}
+
+func ASIGetDroppedFrames(iCameraID int) (int, error) {
+	var frames C.int
+	retcode, err := C.ASIGetDroppedFrames(C.int(iCameraID), &frames)
+	if err != nil {
+		return 0, err
+	}
+	if retcode != 0 {
+		return 0, ASI_ERROR_CODE(retcode)
+	}
+	return int(frames), nil
+}
+
+func ASIGetID(iCameraID int) (id [8]byte, err error) {
+	var asid C.ASI_ID
+	retcode, err := C.ASIGetID(C.int(iCameraID), &asid)
+	if err != nil {
+		return id, err
+	}
+	if retcode != 0 {
+		return id, ASI_ERROR_CODE(retcode)
+	}
+	for i := 0; i < 8; i++ {
+		id[i] = byte(asid.id[i])
+	}
+	return id, nil
+}
+
+func ASIGetSerialNumber(iCameraID int) (sn [8]byte, err error) {
+	var asid C.ASI_SN
+	retcode, err := C.ASIGetSerialNumber(C.int(iCameraID), &asid)
+	if err != nil {
+		return sn, err
+	}
+	if retcode != 0 {
+		return sn, ASI_ERROR_CODE(retcode)
+	}
+	for i := 0; i < 8; i++ {
+		sn[i] = byte(asid.id[i])
+	}
+	return sn, nil
+}
+
+func ASIGetGainOffset(iCameraID int) (pOffset_HighestDR, pOffset_UnityGain, pGain_LowestRN, pOffset_LowestRN int, err error) {
+	var p1, p2, p3, p4 C.int
+	retcode, err := C.ASIGetGainOffset(C.int(iCameraID), &p1, &p2, &p3, &p4)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	if retcode != 0 {
+		return 0, 0, 0, 0, ASI_ERROR_CODE(retcode)
+	}
+	pOffset_HighestDR = int(p1)
+	pOffset_UnityGain = int(p2)
+	pGain_LowestRN = int(p3)
+	pOffset_LowestRN = int(p4)
+	return
 }
