@@ -13,6 +13,7 @@ import (
 type Source struct {
 	RawImage *jpeg.Image
 	Features jpeg.RawFeatures
+	Factory  jpeg.FrameFactory
 	Stream   chan *jpeg.Image
 	Offset   int
 }
@@ -40,10 +41,10 @@ func (s *Source) Run(ctx context.Context, fps int) {
 	}
 }
 
-func (s *Source) Next(ctx context.Context, img *jpeg.Image) error {
+func (s *Source) Next(ctx context.Context, img *jpeg.Image) (jpeg.SrcFrame, error) {
 	select {
 	case <-ctx.Done():
-		return errors.New("Context cancelled")
+		return nil, errors.New("context cancelled")
 	case srcImg := <-s.Stream:
 		if img.Size() < srcImg.Size() {
 			img.Free()
@@ -53,7 +54,7 @@ func (s *Source) Next(ctx context.Context, img *jpeg.Image) error {
 		dstSlice := img.Slice()
 		copy(dstSlice, srcSlice)
 	}
-	return nil
+	return s.Factory.Frame(img, s.Features), nil
 }
 
 // Source of frames
@@ -74,7 +75,7 @@ func (rs *ResumableSource) Stop() {
 	rs.CancelFunc()
 }
 
-func New(fsys fs.FS, path string, fps int) (*ResumableSource, error) {
+func New(fsys fs.FS, path string, fps int, factory jpeg.FrameFactory) (*ResumableSource, error) {
 	d := jpeg.NewDecompressor()
 	defer d.Free()
 
@@ -93,6 +94,7 @@ func New(fsys fs.FS, path string, fps int) (*ResumableSource, error) {
 	return &ResumableSource{
 		Source: Source{
 			RawImage: out,
+			Factory:  factory,
 			Features: features,
 			Stream:   make(chan *jpeg.Image),
 		},

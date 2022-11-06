@@ -27,7 +27,7 @@ type ResumableSource interface {
 }
 
 // SessionManager manages several sessions sharing a single ResumableSource.
-// It starts and stops the sopurce on demand.
+// It starts and stops the source on demand.
 type SessionManager struct {
 	// Construction-time parameters
 	source   ResumableSource

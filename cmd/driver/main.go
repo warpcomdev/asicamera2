@@ -118,14 +118,18 @@ func main() {
 	compressor_threads := 8
 
 	if len(os.Args) > 1 {
-		commonSource, err := fakesource.New(os.DirFS("."), os.Args[1], frames_per_second)
+		commonSource, err := fakesource.New(os.DirFS("."), os.Args[1], frames_per_second, jpeg.FrameFactory{
+			Subsampling: jpeg.TJSAMP_420,
+			Quality:     95,
+			Flags:       0,
+		})
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		pool := jpeg.NewPool(frames_per_second, commonSource.Features)
 		defer pool.Free()
-		farm := jpeg.NewFarm(logger, compressor_threads, frames_per_second, jpeg.TJSAMP_420, 95, 0)
+		farm := jpeg.NewFarm(logger, compressor_threads, frames_per_second)
 		defer farm.Stop()
 
 		firstCamera := true

@@ -11,12 +11,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Source of frames
-type Source interface {
-	Next(ctx context.Context, img *Image) error // get next frame
-	Name() string                               // identifies the camera name
-}
-
 // --------------------------------
 // Metrics
 // --------------------------------
@@ -100,24 +94,26 @@ func NewPool(poolSize int, features RawFeatures) *Pool {
 	return pool
 }
 
-// Stream frame
-type rawFrame struct {
-	number   uint64
-	image    *Image      // input buffer
-	features RawFeatures // raw frame features
-	camera   string
+// Adds additional utility information to SrcFrame
+type srcFrame struct {
+	number uint64
+	camera string
+	SrcFrame
 }
 
-// Stream a source through a rawFrame channel
-func (pool *Pool) stream(ctx context.Context, logger *zap.Logger, source Source, features RawFeatures) chan rawFrame {
-	frames := make(chan rawFrame, pool.poolSize)
+// Stream a source through a SrcFrame channel
+func (pool *Pool) stream(ctx context.Context, logger *zap.Logger, source Source, features RawFeatures) chan srcFrame {
+	frames := make(chan srcFrame, pool.poolSize)
 	go func() {
 		defer close(frames)
 		var frameNumber uint64 = 1 // always skip frame 0
 		cameraName := source.Name()
 		for {
-			var srcImage *Image
-			var ok bool
+			var (
+				srcImage *Image
+				ok       bool
+				err      error
+			)
 			select {
 			case <-ctx.Done():
 				return
@@ -126,16 +122,15 @@ func (pool *Pool) stream(ctx context.Context, logger *zap.Logger, source Source,
 					return
 				}
 			}
-			if err := source.Next(ctx, srcImage); err != nil {
+			newFrame := srcFrame{
+				number: frameNumber,
+				camera: cameraName,
+			}
+			newFrame.SrcFrame, err = source.Next(ctx, srcImage)
+			if err != nil {
 				logger.Error("Failed to get next frame", zap.Error(err))
 				pool.freeList <- srcImage // return the image to the free list
 				return
-			}
-			newFrame := rawFrame{
-				number:   frameNumber,
-				image:    srcImage,
-				features: features,
-				camera:   cameraName,
 			}
 			select {
 			case <-ctx.Done():
@@ -320,7 +315,7 @@ func (pool *jpegPool) frameAt(frameNumber uint64) (*JpegFrame, int) {
 
 // Task running in a compression farm
 type farmTask struct {
-	rawFrame rawFrame        // Input frame to compress
+	rawFrame srcFrame        // Input frame to compress
 	freeList chan *Image     // Return raw image to free list when done
 	jpegPool *jpegPool       // Pool to use for compressed frames
 	group    *sync.WaitGroup // notify on compression finished
@@ -328,23 +323,15 @@ type farmTask struct {
 
 // Farm  of compression gophers
 type Farm struct {
-	// Compression parameters
-	subsampling Subsampling
-	quality     int
-	flags       int
-
 	// Compression gopher group
 	tasks chan farmTask
 	group sync.WaitGroup
 }
 
 // New compression pool
-func NewFarm(logger *zap.Logger, farmSize, taskSize int, subsampling Subsampling, quality int, flags int) *Farm {
+func NewFarm(logger *zap.Logger, farmSize, taskSize int) *Farm {
 	farm := &Farm{
-		subsampling: subsampling,
-		quality:     quality,
-		flags:       flags,
-		tasks:       make(chan farmTask, taskSize),
+		tasks: make(chan farmTask, taskSize),
 	}
 	// launch the compressors
 	for i := 0; i < farmSize; i++ {
@@ -380,7 +367,7 @@ func (farm *Farm) push(task farmTask) {
 func (farm *Farm) run(logger *zap.Logger, compressor Compressor, task farmTask) Compressor {
 	// Notify the task and release resources at the end
 	defer func() {
-		task.freeList <- task.rawFrame.image
+		task.freeList <- task.rawFrame.Buffer()
 		task.group.Done()
 	}()
 	// Get the buffer for compressed frame
@@ -413,14 +400,7 @@ func (farm *Farm) run(logger *zap.Logger, compressor Compressor, task farmTask) 
 	}
 	// Once the frame is unused, overwrite it
 	var err error
-	frame.features, err = compressor.Compress(
-		task.rawFrame.image,
-		task.rawFrame.features,
-		&(frame.image),
-		farm.subsampling,
-		farm.quality,
-		farm.flags|TJFLAG_NOREALLOC,
-	)
+	frame.features, err = task.rawFrame.Compress(compressor, &frame.image)
 	if err != nil {
 		// Release the compressor, just in case
 		logger.Error("Compression failed", zap.Error(err))
