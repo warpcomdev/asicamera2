@@ -3,6 +3,8 @@ package jpeg
 import (
 	"context"
 	"sync"
+
+	"go.uber.org/zap"
 )
 
 type errString string
@@ -51,7 +53,7 @@ func (pipeline *Pipeline) Manage(source ResumableSource) *SessionManager {
 }
 
 // Acquire a Session for the source, making sure it is Started
-func (m *SessionManager) Acquire() (*Session, error) {
+func (m *SessionManager) Acquire(logger *zap.Logger) (*Session, error) {
 	m.cond.L.Lock()
 	defer m.cond.L.Unlock()
 	if m.cancelled {
@@ -63,7 +65,7 @@ func (m *SessionManager) Acquire() (*Session, error) {
 		}
 		ctx, cancelFunc := context.WithCancel(context.Background())
 		m.cancelFunc = cancelFunc
-		m.session = m.pipeline.session(ctx, m.source)
+		m.session = m.pipeline.session(ctx, logger, m.source)
 	}
 	m.users += 1
 	return m.session, nil

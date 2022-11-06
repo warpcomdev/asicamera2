@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
+	"go.uber.org/zap"
 )
 
 type Session interface {
@@ -18,12 +19,12 @@ type Session interface {
 }
 
 type SessionManager interface {
-	Acquire() (Session, error)
+	Acquire(*zap.Logger) (Session, error)
 	Done()
 }
 
 // Track https://github.com/golang/go/issues/54136 for improvements on timeout handling
-func Handler(mgr SessionManager) http.Handler {
+func Handler(logger *zap.Logger, mgr SessionManager) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" && r.Method != "HEAD" {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -37,8 +38,9 @@ func Handler(mgr SessionManager) http.Handler {
 			return
 		}
 
-		session, err := mgr.Acquire()
+		session, err := mgr.Acquire(logger)
 		if err != nil {
+			logger.Error("Acquiring session failed", zap.Error(err))
 			http.Error(w, "Acquiring session failed", http.StatusInternalServerError)
 			return
 		}
@@ -46,6 +48,7 @@ func Handler(mgr SessionManager) http.Handler {
 
 		conn, rw, err := hijacker.Hijack()
 		if err != nil {
+			logger.Error("Hijacking failed", zap.Error(err))
 			http.Error(w, "Hijacking failed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -59,9 +62,11 @@ func Handler(mgr SessionManager) http.Handler {
 			one := make([]byte, 1)
 			for {
 				if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+					logger.Error("SetReadDeadline failed", zap.Error(err))
 					return
 				}
 				if _, err := rw.Read(one); errors.Is(err, io.EOF) {
+					logger.Error("Read failed", zap.Error(err))
 					return
 				}
 				rw.Discard(rw.Available())
@@ -132,7 +137,7 @@ func Handler(mgr SessionManager) http.Handler {
 			if err != nil {
 				// If we missed a frame, we don't know how is the stream
 				// actually ... better disconnect and force start again
-				log.Print(err)
+				logger.Error("Failed to send MIME part", zap.Error(err))
 				// exhaust the frame goroutine
 				conn.Close()
 				for discardedFrame := range frames {

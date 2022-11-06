@@ -1,20 +1,22 @@
 package jpeg
 
 import (
-	"log"
 	"net/http"
+
+	"go.uber.org/zap"
 )
 
 // Track https://github.com/golang/go/issues/54136 for improvements on timeout handling
-func Handler(mgr *SessionManager) http.Handler {
+func Handler(logger *zap.Logger, mgr *SessionManager) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" && r.Method != "HEAD" {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		session, err := mgr.Acquire()
+		session, err := mgr.Acquire(logger)
 		if err != nil {
+			logger.Error("Acquiring session failed", zap.Error(err))
 			http.Error(w, "Acquiring session failed", http.StatusInternalServerError)
 			return
 		}
@@ -22,7 +24,7 @@ func Handler(mgr *SessionManager) http.Handler {
 
 		frame, _, status := session.Next(1)
 		if frame == nil { // session died
-			log.Print("session terminated, disconnecting client")
+			logger.Info("session terminated, disconnecting client")
 			return
 		}
 		defer frame.Done()

@@ -3,7 +3,7 @@ package jpeg
 import (
 	"bytes"
 	imagejpeg "image/jpeg"
-	"io/ioutil"
+	"io"
 	"os"
 	"testing"
 )
@@ -32,7 +32,7 @@ func BenchmarkDecompressBuiltin(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	buf, err := ioutil.ReadAll(infile)
+	buf, err := io.ReadAll(infile)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func BenchmarkCompressBuiltin(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	buf, err := ioutil.ReadAll(infile)
+	buf, err := io.ReadAll(infile)
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -15,9 +15,28 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"unsafe"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+var (
+	jpegAllocationSize = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "jpeg_allocation_size",
+		Help: "Size of memory allocation in jpeg",
+		Buckets: []float64{
+			16384, 65535, 262144, 524288, 1048576, 2097152, 4194304,
+		},
+	})
+
+	jpegFreeSize = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "jpeg_free_size",
+		Help: "Size of memory allocation free'd in jpeg",
+		Buckets: []float64{
+			16384, 65535, 262144, 524288, 1048576, 2097152, 4194304,
+		},
+	})
 )
 
 type ColorSpace int  // ColorSpace of the image (see TJCS in turbojpeg.h)
@@ -60,10 +79,10 @@ func (img *Image) Slice() []byte {
 
 // Alloc a buffer with the given capacity in bytes
 func (img *Image) Alloc(size int) error {
-	log.Printf("Allocating %d bytes for image", size)
+	jpegAllocationSize.Observe(float64(size))
 	buf := C.tjAlloc(C.int(size))
 	if buf == nil {
-		return fmt.Errorf("Failed to allocate %d bytes", size)
+		return fmt.Errorf("failed to allocate %d bytes", size)
 	}
 	img.Free()
 	img.buffer = buf
@@ -74,7 +93,7 @@ func (img *Image) Alloc(size int) error {
 // Free the allocated buffer, if any
 func (img *Image) Free() {
 	if img.imgsize > 0 {
-		log.Printf("Releasing image of size %d", img.imgsize)
+		jpegFreeSize.Observe(float64(img.imgsize))
 		C.tjFree(img.buffer)
 	}
 	img.imgsize = 0

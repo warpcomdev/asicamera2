@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.uber.org/zap"
 
 	"github.com/warpcomdev/asicamera2/internal/driver/camera"
 	"github.com/warpcomdev/asicamera2/internal/driver/fakesource"
@@ -44,8 +45,8 @@ type fakeSessionManager struct {
 	Manager *jpeg.SessionManager
 }
 
-func (m fakeSessionManager) Acquire() (mjpeg.Session, error) {
-	return m.Manager.Acquire()
+func (m fakeSessionManager) Acquire(logger *zap.Logger) (mjpeg.Session, error) {
+	return m.Manager.Acquire(logger)
 }
 
 func (m fakeSessionManager) Done() {
@@ -63,6 +64,12 @@ func (ns namedSource) Name() string {
 
 func main() {
 	fmt.Println("Entering program")
+
+	logger, err := zap.NewProduction()
+	if err != nil {
+		log.Fatalf("can't initialize zap logger: %v", err)
+	}
+	defer logger.Sync()
 
 	apiVersion, err := camera.ASIGetSDKVersion()
 	if err != nil {
@@ -95,7 +102,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		go info.Monitor(context.Background(), 30*time.Second)
+		go info.Monitor(context.Background(), logger, 30*time.Second)
 		fmt.Println(string(data))
 	}
 
@@ -118,7 +125,7 @@ func main() {
 
 		pool := jpeg.NewPool(frames_per_second, commonSource.Features)
 		defer pool.Free()
-		farm := jpeg.NewFarm(compressor_threads, frames_per_second, jpeg.TJSAMP_420, 95, 0)
+		farm := jpeg.NewFarm(logger, compressor_threads, frames_per_second, jpeg.TJSAMP_420, 95, 0)
 		defer farm.Stop()
 
 		firstCamera := true
@@ -128,11 +135,11 @@ func main() {
 			defer pipeline.Join()
 			manager := pipeline.Manage(fs)
 
-			mjpeg_handler := mjpeg.Handler(fakeSessionManager{Manager: manager})
+			mjpeg_handler := mjpeg.Handler(logger, fakeSessionManager{Manager: manager})
 			http.Handle("/mjpeg/"+strconv.Itoa(idx), mjpeg_handler)
 			http.Handle("/mjpeg/"+camera, mjpeg_handler)
 
-			jpeg_handler := jpeg.Handler(manager)
+			jpeg_handler := jpeg.Handler(logger, manager)
 			http.Handle("/jpeg/"+strconv.Itoa(idx), jpeg_handler)
 			http.Handle("/jpeg/"+camera, jpeg_handler)
 
