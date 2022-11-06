@@ -61,8 +61,10 @@ const (
 
 // Image buffer. Can be a jpeg or a raw image
 type Image struct {
-	buffer  *C.uchar // Buffer as unsigned char * (turbojpeg API format)
-	imgsize int      // size of the image in the buffer
+	buffer   *C.uchar // Buffer as unsigned char * (turbojpeg API format)
+	imgsize  int      // size of the image in the buffer
+	origsize int      // original size on buffer allocation
+	// (only static allocation is supported)
 }
 
 // Size currently allocated to the image
@@ -70,11 +72,32 @@ func (img *Image) Size() int {
 	return img.imgsize
 }
 
+// Capacity of the underlying buffer
+func (img *Image) Cap() int {
+	return img.origsize
+}
+
 // Slice returns a reference to the image as a byte slice.
 // This should be consumed before encoding or decoding the image
 // again, since these operations can alter the underlying buffer.
 func (img *Image) Slice() []byte {
 	return unsafe.Slice((*byte)(img.buffer), img.imgsize)
+}
+
+// Copy image from source buffer
+func (img *Image) Copy(from *Image) error {
+	if img.Cap() < from.Size() {
+		img.Free()
+		if err := img.Alloc(from.Size()); err != nil {
+			return err
+		}
+	}
+	img.imgsize = from.imgsize
+	if img.imgsize > 0 {
+		dst := unsafe.Slice((*byte)(img.buffer), img.origsize)
+		copy(dst, from.Slice())
+	}
+	return nil
 }
 
 // Alloc a buffer with the given capacity in bytes
@@ -86,16 +109,18 @@ func (img *Image) Alloc(size int) error {
 	}
 	img.Free()
 	img.buffer = buf
+	img.origsize = size
 	img.imgsize = size
 	return nil
 }
 
 // Free the allocated buffer, if any
 func (img *Image) Free() {
-	if img.imgsize > 0 {
-		jpegFreeSize.Observe(float64(img.imgsize))
+	if img.origsize > 0 {
+		jpegFreeSize.Observe(float64(img.origsize))
 		C.tjFree(img.buffer)
 	}
+	img.origsize = 0
 	img.imgsize = 0
 }
 
@@ -166,6 +191,7 @@ func (d Decompressor) ReadFile(fsys fs.FS, path string, img *Image) (JpegFeature
 	if err != nil {
 		return JpegFeatures{}, err
 	}
+	defer infile.Close()
 	info, err := infile.Stat()
 	if err != nil {
 		return JpegFeatures{}, err
@@ -181,6 +207,7 @@ func (d Decompressor) ReadFile(fsys fs.FS, path string, img *Image) (JpegFeature
 	if read < int(size) {
 		return JpegFeatures{}, fmt.Errorf("failed to read %d bytes of file %s, eof at %d", size, path, read)
 	}
+	img.origsize = read
 	img.imgsize = read
 	var width, height, jpegSubsamp, jpegColorspace C.int
 	res := C.tjDecompressHeader3(d.handle, img.buffer, C.ulong(img.imgsize), &width, &height, &jpegSubsamp, &jpegColorspace)
@@ -209,7 +236,8 @@ func (d Decompressor) Decompress(input *Image, jpegFeat JpegFeatures, output *Im
 	rawFeat := RawFeatures{Features: jpegFeat.Features, Format: format}
 	pitch := rawFeat.Pitch()
 	rawSize := pitch * rawFeat.Height
-	if output.imgsize < rawSize {
+	if output.origsize < rawSize {
+		output.Free()
 		if err := output.Alloc(rawSize); err != nil {
 			return RawFeatures{}, err
 		}
@@ -223,7 +251,7 @@ func (d Decompressor) Decompress(input *Image, jpegFeat JpegFeatures, output *Im
 
 // Compress the input buffer
 func (c *Compressor) Compress(input *Image, rawFeat RawFeatures, output *Image, subsamp Subsampling, quality int, flags int) (JpegFeatures, error) {
-	buffer, bufsize := output.buffer, C.ulong(output.imgsize)
+	buffer, bufsize := output.buffer, C.ulong(output.origsize)
 	code := C.tjCompress2(c.handle, input.buffer, C.int(rawFeat.Width), C.int(rawFeat.Pitch()), C.int(rawFeat.Height), C.int(rawFeat.Format), &buffer, &bufsize, C.int(subsamp), C.int(quality), C.int(flags))
 	if code != 0 {
 		return JpegFeatures{}, handleError(c.handle)

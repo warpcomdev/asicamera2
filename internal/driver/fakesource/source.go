@@ -1,4 +1,4 @@
-package fakesource
+package dirsource
 
 import (
 	"context"
@@ -7,15 +7,17 @@ import (
 	"time"
 
 	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
+	"go.uber.org/zap"
 )
 
 // Source of frames
 type Source struct {
-	RawImage *jpeg.Image
-	Features jpeg.RawFeatures
-	Factory  jpeg.FrameFactory
-	Stream   chan *jpeg.Image
-	Offset   int
+	SourceName string
+	RawImage   *jpeg.Image
+	Features   jpeg.RawFeatures
+	Factory    jpeg.FrameCompressor
+	Stream     chan *jpeg.Image
+	Offset     int
 }
 
 func (s *Source) Run(ctx context.Context, fps int) {
@@ -54,7 +56,12 @@ func (s *Source) Next(ctx context.Context, img *jpeg.Image) (jpeg.SrcFrame, erro
 		dstSlice := img.Slice()
 		copy(dstSlice, srcSlice)
 	}
-	return s.Factory.Frame(img, s.Features), nil
+	return s.Factory.Frame(s.SourceName, img, s.Features), nil
+}
+
+// Name implements jpeg.Source
+func (s *Source) Name() string {
+	return s.SourceName
 }
 
 // Source of frames
@@ -64,7 +71,7 @@ type ResumableSource struct {
 	CancelFunc      func()
 }
 
-func (rs *ResumableSource) Start() error {
+func (rs *ResumableSource) Start(*zap.Logger) error {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	rs.CancelFunc = cancelFunc
 	go rs.Run(ctx, rs.FramesPerSecond)
@@ -75,7 +82,7 @@ func (rs *ResumableSource) Stop() {
 	rs.CancelFunc()
 }
 
-func New(fsys fs.FS, path string, fps int, factory jpeg.FrameFactory) (*ResumableSource, error) {
+func New(fsys fs.FS, path string, fps int, factory jpeg.FrameCompressor) (*ResumableSource, error) {
 	d := jpeg.NewDecompressor()
 	defer d.Free()
 
@@ -93,10 +100,11 @@ func New(fsys fs.FS, path string, fps int, factory jpeg.FrameFactory) (*Resumabl
 
 	return &ResumableSource{
 		Source: Source{
-			RawImage: out,
-			Factory:  factory,
-			Features: features,
-			Stream:   make(chan *jpeg.Image),
+			SourceName: path,
+			RawImage:   out,
+			Factory:    factory,
+			Features:   features,
+			Stream:     make(chan *jpeg.Image),
 		},
 		FramesPerSecond: fps,
 	}, nil

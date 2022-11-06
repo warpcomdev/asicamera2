@@ -22,7 +22,7 @@ var ErrManagerCancelled errString = "manager has been cancelled"
 // before `Start` or after `Stop`.
 type ResumableSource interface {
 	Source
-	Start() error
+	Start(*zap.Logger) error
 	Stop()
 }
 
@@ -60,7 +60,7 @@ func (m *SessionManager) Acquire(logger *zap.Logger) (*Session, error) {
 		return nil, ErrManagerCancelled
 	}
 	if m.session == nil {
-		if err := m.source.Start(); err != nil {
+		if err := m.source.Start(logger); err != nil {
 			return nil, err
 		}
 		ctx, cancelFunc := context.WithCancel(context.Background())

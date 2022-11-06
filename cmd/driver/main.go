@@ -18,7 +18,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/warpcomdev/asicamera2/internal/driver/camera"
-	"github.com/warpcomdev/asicamera2/internal/driver/fakesource"
+	"github.com/warpcomdev/asicamera2/internal/driver/dirsource"
 	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
 	"github.com/warpcomdev/asicamera2/internal/driver/mjpeg"
 )
@@ -51,15 +51,6 @@ func (m fakeSessionManager) Acquire(logger *zap.Logger) (mjpeg.Session, error) {
 
 func (m fakeSessionManager) Done() {
 	m.Manager.Done()
-}
-
-type namedSource struct {
-	*fakesource.ResumableSource
-	cameraName string
-}
-
-func (ns namedSource) Name() string {
-	return ns.cameraName
 }
 
 func main() {
@@ -118,24 +109,33 @@ func main() {
 	compressor_threads := 8
 
 	if len(os.Args) > 1 {
-		commonSource, err := fakesource.New(os.DirFS("."), os.Args[1], frames_per_second, jpeg.FrameFactory{
-			Subsampling: jpeg.TJSAMP_420,
-			Quality:     95,
-			Flags:       0,
-		})
+		// commonSource, err := dirsource.New(os.DirFS("."), os.Args[1], frames_per_second, jpeg.FrameFactory{
+		// 	Subsampling: jpeg.TJSAMP_420,
+		// 	Quality:     95,
+		// 	Flags:       0,
+		// })
+		commonSource, err := dirsource.New(logger, os.Args[1])
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		pool := jpeg.NewPool(frames_per_second, commonSource.Features)
+		feat := jpeg.RawFeatures{
+			Features: jpeg.Features{
+				Width:  1920,
+				Height: 1080,
+			},
+			Format: jpeg.PF_RGBA,
+		}
+		imgSize := feat.Pitch() * feat.Height
+		pool := jpeg.NewPool(frames_per_second, imgSize)
 		defer pool.Free()
 		farm := jpeg.NewFarm(logger, compressor_threads, frames_per_second)
 		defer farm.Stop()
 
 		firstCamera := true
 		for idx, camera := range []string{"cam0", "cam1"} {
-			fs := namedSource{ResumableSource: commonSource, cameraName: camera}
-			pipeline := jpeg.New(pool, farm, 3*frames_per_second, fs.Features)
+			fs := commonSource
+			pipeline := jpeg.New(pool, farm, 3*frames_per_second, imgSize)
 			defer pipeline.Join()
 			manager := pipeline.Manage(fs)
 
