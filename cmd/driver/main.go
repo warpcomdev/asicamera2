@@ -1,13 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
-	"encoding/json"
 
 	_ "net/http/pprof"
 
@@ -15,10 +15,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/warpcomdev/asicamera2/internal/driver/camera"
 	"github.com/warpcomdev/asicamera2/internal/driver/fakesource"
 	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
 	"github.com/warpcomdev/asicamera2/internal/driver/mjpeg"
-	"github.com/warpcomdev/asicamera2/internal/driver/camera"
 )
 
 var (
@@ -93,9 +93,10 @@ func main() {
 			panic(err)
 		}
 		defer camera.ASICloseCamera(info.CameraID)
-		if err := camera.ASIInitCamera(info.CameraID); err != nil {
-			panic(err)
-		}
+		// Only for video capturing
+		// if err := camera.ASIInitCamera(info.CameraID); err != nil {
+		// 	panic(err)
+		// }
 		caps, err := camera.ASIGetControlCaps(info.CameraID)
 		if err != nil {
 			panic(err)
