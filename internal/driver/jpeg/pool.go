@@ -111,6 +111,7 @@ func (pool *Pool) stream(ctx context.Context, logger *zap.Logger, source Source)
 				if !ok {
 					return
 				}
+				break
 			}
 			newFrame := srcFrame{
 				number: frameNumber,
@@ -128,6 +129,7 @@ func (pool *Pool) stream(ctx context.Context, logger *zap.Logger, source Source)
 				return
 			case frames <- newFrame:
 				frameNumber += 1
+				break
 			}
 		}
 	}()
@@ -144,6 +146,7 @@ func (pool *Pool) watchdog() {
 		case <-pool.free:
 			return
 		case <-ticker.C:
+			break
 		}
 		// try to acquire a free buffer before the next tick
 		select {
@@ -154,6 +157,7 @@ func (pool *Pool) watchdog() {
 				return // list closed
 			}
 			pool.freeList <- img
+			break
 		case <-ticker.C:
 			panic("no free raw buffers for 10 seconds")
 		}

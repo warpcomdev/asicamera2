@@ -73,6 +73,7 @@ func (s *Source) Next(ctx context.Context, img *jpeg.Image) (jpeg.SrcFrame, erro
 			if frame != nil {
 				return frame, nil
 			}
+			break
 		case <-ctx.Done():
 			return nil, errors.New("context cancelled")
 		}

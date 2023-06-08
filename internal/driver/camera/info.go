@@ -185,6 +185,7 @@ func (c *ASICamera) autoClose(autoClose time.Duration) {
 					closeErr = asiCloseCamera(c.CameraID, c.SerialNumber)
 				}
 			}()
+			break
 		case <-c.join:
 			func() { // to defer
 				c.mutex.Lock()

@@ -2,26 +2,24 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
-	"regexp"
-	"strconv"
+	"sync"
 	"time"
 
-	_ "net/http/pprof"
-
+	"github.com/cenkalti/backoff"
+	"github.com/kardianos/service"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.uber.org/zap"
-
 	"github.com/warpcomdev/asicamera2/internal/driver/camera"
-	"github.com/warpcomdev/asicamera2/internal/driver/dirsource"
-	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
-	"github.com/warpcomdev/asicamera2/internal/driver/mjpeg"
+	"github.com/warpcomdev/asicamera2/internal/driver/camera/backend"
+	"github.com/warpcomdev/asicamera2/internal/driver/watcher"
+	"go.uber.org/zap"
 )
 
 var (
@@ -42,61 +40,164 @@ var (
 	)
 )
 
-type fakeSessionManager struct {
-	Manager *jpeg.SessionManager
+type program struct {
+	Config *Config
+	Logger *zap.Logger
+	Cancel func()
 }
 
-func (m fakeSessionManager) Acquire(logger *zap.Logger) (mjpeg.Session, error) {
-	return m.Manager.Acquire(logger)
+func (p *program) Start(s service.Service) error {
+	// Start should not block. Do the actual work async.
+	p.Logger.Info("start signal received")
+	if p.Cancel != nil {
+		if err := p.Stop(s); err != nil {
+			return err
+		}
+	}
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	p.Cancel = cancelFunc
+	go p.Run(ctx)
+	return nil
 }
 
-func (m fakeSessionManager) Done() {
-	m.Manager.Done()
+func (p *program) Stop(s service.Service) error {
+	// Stop should not block. Return with a few seconds.
+	p.Logger.Info("stop signal received")
+	if p.Cancel != nil {
+		cancel := p.Cancel
+		p.Cancel = nil
+		// Close the service in the background
+		wait := make(chan struct{}, 0)
+		go func() {
+			defer close(wait)
+			cancel()
+		}()
+		// Wait up to two seconds for cancellation
+		select {
+		case <-wait:
+			break
+		case <-time.After(2 * time.Second):
+			break
+		}
+	}
+	return nil
+}
+
+func (p *program) Run(ctx context.Context) {
+	mux := &http.ServeMux{}
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/debug", http.DefaultServeMux)
+	//Cannot set absolute timeout because mjpeg hander is streaming
+	//Must implement Hijack to fix
+	srv := &http.Server{
+		Addr:           fmt.Sprintf(":%d", p.Config.Port),
+		Handler:        mux,
+		ReadTimeout:    time.Duration(p.Config.ReadTimeout) * time.Second,
+		WriteTimeout:   time.Duration(p.Config.WriteTimeout) * time.Second,
+		MaxHeaderBytes: p.Config.MaxHeaderBytes,
+	}
+	timer := backoff.NewExponentialBackOff()
+	maxBackoff := 5 * time.Minute
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			start := time.Now()
+			p.Logger.Info("server started")
+			dualContext, cancel := context.WithCancel(ctx)
+			var (
+				wg      sync.WaitGroup
+				apiErr  error
+				httpErr error
+			)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer srv.Close()
+				<-dualContext.Done()
+			}()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer cancel()
+				apiServer, err := backend.New(p.Logger)
+				if err != nil {
+					apiErr = err
+					return
+				}
+				folder, err := apiServer.Folder(dualContext)
+				if err != nil {
+					apiErr = err
+					return
+				}
+				watch, err := watcher.New(p.Logger, p.Config.HistoryFolder, apiServer, folder, p.Config.FileTypes(), time.Duration(p.Config.MonitorFor)*time.Minute)
+				if err != nil {
+					apiErr = err
+					return
+				}
+				apiErr = watch.Watch(dualContext)
+			}()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer cancel()
+				httpErr = srv.ListenAndServe()
+			}()
+			wg.Wait()
+			stop := time.Now()
+			if (apiErr == nil || errors.Is(apiErr, context.Canceled)) &&
+				(httpErr == nil || errors.Is(httpErr, http.ErrServerClosed)) {
+				p.Logger.Info("server stopped")
+				return
+			}
+			// If the service was up for a decent amount of time, reset the backoff
+			if stop.Sub(start) > 5*time.Second {
+				timer.Reset()
+			}
+			duration := timer.NextBackOff()
+			if duration == backoff.Stop {
+				duration = maxBackoff
+			}
+			err := errors.Join(apiErr, httpErr)
+			p.Logger.Error("server failed, retrying", zap.Error(err), zap.Duration("backoff", duration))
+			<-time.After(duration)
+		}
+	}
 }
 
 func main() {
-	fmt.Println("Entering program")
+	svcConfig := &service.Config{
+		Name:        "AsiCameraDriver",
+		DisplayName: "ASI Camera image upload driver",
+		Description: "Upload ASI camera images to backend service",
+	}
 
-	logger, err := zap.NewProduction()
+	config := newConfig()
+	var (
+		logger *zap.Logger
+		err    error
+	)
+	if config.Debug {
+		logger, err = zap.NewDevelopment()
+	} else {
+		logger, err = zap.NewProduction()
+	}
 	if err != nil {
 		log.Fatalf("can't initialize zap logger: %v", err)
 	}
+	// Avoid stack traces below panic level
+	logger = logger.WithOptions(zap.AddStacktrace(zap.DPanicLevel))
+	// Set logging level
 	defer logger.Sync()
 
+	// Get SDK version
 	apiVersion, err := camera.ASIGetSDKVersion()
 	if err != nil {
-		panic(err)
+		logger.Fatal("Failed to get SDK version", zap.Error(err))
+		return
 	}
-	fmt.Printf("ASICamera2 SDK version %s\n", apiVersion)
-
-	connectedCameras, err := camera.ASIGetNumOfConnectedCameras()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Number of connected cameras %d\n", connectedCameras)
-
-	if connectedCameras > 0 {
-		info, err := camera.New(0, 5*time.Minute)
-		if err != nil {
-			panic(err)
-		}
-		defer info.Join()
-		data, err := json.MarshalIndent(info.ASI_CAMERA_INFO, "", "  ")
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println(string(data))
-		caps, err := info.ASIGetControlCaps()
-		if err != nil {
-			panic(err)
-		}
-		data, err = json.MarshalIndent(caps, "", "  ")
-		if err != nil {
-			panic(err)
-		}
-		go info.Monitor(context.Background(), logger, 30*time.Second)
-		fmt.Println(string(data))
-	}
+	logger.Info("ASICamera2 SDK version", zap.String("apiVersion", apiVersion))
 
 	// Register startup metrics
 	startTime := time.Now()
@@ -106,70 +207,25 @@ func main() {
 		apiVersion,
 	).Set(1)
 
-	frames_per_second := 15
-	compressor_threads := 8
-
+	prg := &program{
+		Logger: logger,
+		Config: config,
+	}
+	s, err := service.New(prg, svcConfig)
+	if err != nil {
+		logger.Fatal("new service failed", zap.Error(err))
+	}
 	if len(os.Args) > 1 {
-		// commonSource, err := dirsource.New(os.DirFS("."), os.Args[1], frames_per_second, jpeg.FrameFactory{
-		// 	Subsampling: jpeg.TJSAMP_420,
-		// 	Quality:     95,
-		// 	Flags:       0,
-		// })
-		commonSource, err := dirsource.New(logger, os.Args[1], regexp.MustCompile(`\d{4}-\d{2}-\d{2}`))
+		err = service.Control(s, os.Args[1])
 		if err != nil {
-			log.Fatal(err)
+			logger.Fatal("service control failed", zap.Error(err))
 		}
-
-		feat := jpeg.RawFeatures{
-			Features: jpeg.Features{
-				Width:  1920,
-				Height: 1080,
-			},
-			Format: jpeg.PF_RGBA,
-		}
-		imgSize := feat.Pitch() * feat.Height
-		pool := jpeg.NewPool(frames_per_second, imgSize)
-		defer pool.Free()
-		farm := jpeg.NewFarm(logger, compressor_threads, frames_per_second)
-		defer farm.Stop()
-
-		firstCamera := true
-		for idx, camera := range []string{"cam0", "cam1"} {
-			fs := commonSource
-			pipeline := jpeg.New(pool, farm, 3*frames_per_second, imgSize)
-			defer pipeline.Join()
-			manager := pipeline.Manage(fs)
-
-			mjpeg_handler := mjpeg.Handler(logger, fakeSessionManager{Manager: manager})
-			http.Handle("/mjpeg/"+strconv.Itoa(idx), mjpeg_handler)
-			http.Handle("/mjpeg/"+camera, mjpeg_handler)
-
-			jpeg_handler := jpeg.Handler(logger, manager)
-			http.Handle("/jpeg/"+strconv.Itoa(idx), jpeg_handler)
-			http.Handle("/jpeg/"+camera, jpeg_handler)
-
-			if firstCamera {
-				firstCamera = false
-				http.Handle("/mjpeg", mjpeg_handler)
-				http.Handle("/jpeg", jpeg_handler)
-			}
-		}
-
+		return
 	}
 
-	http.Handle("/metrics", promhttp.Handler())
-	http.Handle("/debug", http.DefaultServeMux)
-
-	fmt.Println("Listening on port :8080")
-	//Cannot set absolute timeout because mjpeg hander is streaming
-	//Must implement Hijack to fix
-	srv := &http.Server{
-		Addr:           ":8080",
-		Handler:        http.DefaultServeMux,
-		ReadTimeout:    5 * time.Second,
-		WriteTimeout:   7 * time.Second,
-		MaxHeaderBytes: 1 << 20,
+	logger.Info("starting service manager")
+	err = s.Run()
+	if err != nil {
+		logger.Error("run failed", zap.Error(err))
 	}
-	log.Fatal(srv.ListenAndServe())
-	//log.Fatal(http.ListenAndServe("0.0.0.0:8080", nil))
 }

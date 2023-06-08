@@ -109,6 +109,7 @@ func Handler(logger *zap.Logger, mgr SessionManager) http.Handler {
 					return
 				case frames <- frame:
 					currentFrame = frameNum + 1
+					break
 				}
 			}
 		}()

@@ -120,6 +120,7 @@ func (w *Watcher) watch(logger *zap.Logger, root string, match Matcher) {
 			if err := w.rescan(logger, root, match); err != nil {
 				logger.Error("rescan failed", zap.Error(err))
 			}
+			break
 		case event, ok := <-w.watcher.Events:
 			if !ok {
 				return
@@ -154,11 +155,13 @@ func (w *Watcher) watch(logger *zap.Logger, root string, match Matcher) {
 					}
 				}
 			}
+			break
 		case err, ok := <-w.watcher.Errors:
 			if !ok {
 				return
 			}
 			logger.Error("notify watcher failed", zap.Error(err))
+			break
 		}
 	}
 }

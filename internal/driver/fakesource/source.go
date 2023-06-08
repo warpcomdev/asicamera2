@@ -35,8 +35,10 @@ func (s *Source) Run(ctx context.Context, fps int) {
 				c := copy(line, buff)
 				c += copy(buff, buff[pitch:])
 				c += copy(buff[total-pitch:], line)
+				break
 			default:
 			}
+			break
 		case <-ctx.Done():
 			return
 		}
