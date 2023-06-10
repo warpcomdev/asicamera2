@@ -2,23 +2,20 @@ package main
 
 import (
 	"context"
-	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
-	"os"
 	"sync"
 	"time"
 
-	"github.com/cenkalti/backoff"
+	"github.com/BurntSushi/toml"
 	"github.com/kardianos/service"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/warpcomdev/asicamera2/internal/driver/camera"
-	"github.com/warpcomdev/asicamera2/internal/driver/camera/backend"
-	"github.com/warpcomdev/asicamera2/internal/driver/watcher"
 	"go.uber.org/zap"
 )
 
@@ -41,8 +38,8 @@ var (
 )
 
 type program struct {
-	Config *Config
 	Logger *zap.Logger
+	Config Config
 	Cancel func()
 }
 
@@ -87,83 +84,36 @@ func (p *program) Run(ctx context.Context) {
 	mux := &http.ServeMux{}
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/debug", http.DefaultServeMux)
-	//Cannot set absolute timeout because mjpeg hander is streaming
-	//Must implement Hijack to fix
+	//Caution with absolute timeouts! mjpeg hander is streaming
+	//We can use them because mpeghandler implements Hijack to fix
 	srv := &http.Server{
 		Addr:           fmt.Sprintf(":%d", p.Config.Port),
 		Handler:        mux,
-		ReadTimeout:    time.Duration(p.Config.ReadTimeout) * time.Second,
-		WriteTimeout:   time.Duration(p.Config.WriteTimeout) * time.Second,
+		ReadTimeout:    time.Duration(p.Config.ReadTimeoutSeconds) * time.Second,
+		WriteTimeout:   time.Duration(p.Config.WriteTimeoutSeconds) * time.Second,
 		MaxHeaderBytes: p.Config.MaxHeaderBytes,
 	}
-	timer := backoff.NewExponentialBackOff()
-	maxBackoff := 5 * time.Minute
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			start := time.Now()
-			p.Logger.Info("server started")
-			dualContext, cancel := context.WithCancel(ctx)
-			var (
-				wg      sync.WaitGroup
-				apiErr  error
-				httpErr error
-			)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer srv.Close()
-				<-dualContext.Done()
-			}()
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer cancel()
-				apiServer, err := backend.New(p.Logger)
-				if err != nil {
-					apiErr = err
-					return
-				}
-				folder, err := apiServer.Folder(dualContext)
-				if err != nil {
-					apiErr = err
-					return
-				}
-				watch, err := watcher.New(p.Logger, p.Config.HistoryFolder, apiServer, folder, p.Config.FileTypes(), time.Duration(p.Config.MonitorFor)*time.Minute)
-				if err != nil {
-					apiErr = err
-					return
-				}
-				apiErr = watch.Watch(dualContext)
-			}()
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer cancel()
-				httpErr = srv.ListenAndServe()
-			}()
-			wg.Wait()
-			stop := time.Now()
-			if (apiErr == nil || errors.Is(apiErr, context.Canceled)) &&
-				(httpErr == nil || errors.Is(httpErr, http.ErrServerClosed)) {
-				p.Logger.Info("server stopped")
-				return
-			}
-			// If the service was up for a decent amount of time, reset the backoff
-			if stop.Sub(start) > 5*time.Second {
-				timer.Reset()
-			}
-			duration := timer.NextBackOff()
-			if duration == backoff.Stop {
-				duration = maxBackoff
-			}
-			err := errors.Join(apiErr, httpErr)
-			p.Logger.Error("server failed, retrying", zap.Error(err), zap.Duration("backoff", duration))
-			<-time.After(duration)
-		}
-	}
+	apiServer := p.Config.Server(p.Logger)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	// Launch the HTTP server
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer srv.Close()
+			<-ctx.Done()
+		}()
+		srv.ListenAndServe()
+	}()
+	// launch the folder watcher
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		watchMedia(ctx, p.Logger, p.Config, apiServer)
+	}()
 }
 
 func main() {
@@ -173,11 +123,21 @@ func main() {
 		Description: "Upload ASI camera images to backend service",
 	}
 
-	config := newConfig()
-	var (
-		logger *zap.Logger
-		err    error
-	)
+	var configPath string
+	flag.StringVar(&configPath, "c", "C:\\asicamera\\config.toml", "path to config file")
+	flag.Parse()
+
+	// Load config
+	var config Config
+	_, err := toml.DecodeFile(configPath, &config)
+	if err != nil {
+		panic(err)
+	}
+	if err := config.Check(); err != nil {
+		panic(err)
+	}
+
+	var logger *zap.Logger
 	if config.Debug {
 		logger, err = zap.NewDevelopment()
 	} else {
@@ -190,6 +150,10 @@ func main() {
 	logger = logger.WithOptions(zap.AddStacktrace(zap.DPanicLevel))
 	// Set logging level
 	defer logger.Sync()
+
+	anonimizedConfig := config
+	anonimizedConfig.ApiKey = "********"
+	logger.Info("config", zap.Any("config", anonimizedConfig))
 
 	// Get SDK version
 	apiVersion, err := camera.ASIGetSDKVersion()
@@ -215,8 +179,9 @@ func main() {
 	if err != nil {
 		logger.Fatal("new service failed", zap.Error(err))
 	}
-	if len(os.Args) > 1 {
-		err = service.Control(s, os.Args[1])
+	args := flag.Args()
+	if len(args) > 1 {
+		err = service.Control(s, args[1])
 		if err != nil {
 			logger.Fatal("service control failed", zap.Error(err))
 		}

@@ -3,6 +3,7 @@ module github.com/warpcomdev/asicamera2
 go 1.18
 
 require (
+	github.com/BurntSushi/toml v1.3.2
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/kardianos/service v1.2.2

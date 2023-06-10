@@ -10,9 +10,7 @@ import (
 )
 
 // Server is the interface that must be implemented by the server
-type Server interface {
-	Upload(ctx context.Context, path string) error
-}
+type Server func(ctx context.Context, path string) error
 
 // fileTask is a file that needs to be uploaded
 type fileTask struct {
@@ -93,18 +91,24 @@ func (t fileTask) upload(ctx context.Context, logger *zap.Logger, server Server,
 
 func (t fileTask) triggered(ctx context.Context, logger *zap.Logger, server Server) time.Time {
 	// The upload has been triggered!
+	logger = logger.With(zap.String("file", t.Path), zap.Time("uploaded", t.Uploaded))
 	info, err := os.Stat(t.Path)
 	if err != nil {
-		logger.Error("failed to stat file", zap.String("file", t.Path), zap.Error(err))
+		logger.Error("failed to stat file", zap.Error(err))
 		return t.Uploaded
 	}
-	if info.ModTime().Before(t.Uploaded) {
+	// BEWARE: modtime reports time in nanoseconds, but the history file
+	// for some reason only saves with resolution of seconds. So we must round before
+	// comparing, otherwise we always upload.
+	modtime := info.ModTime().Round(time.Second)
+	if modtime.Before(t.Uploaded) {
 		// The file has not been modified since the last upload
-		logger.Debug("file not modified", zap.String("file", t.Path))
+		logger.Debug("file not modified")
 		return t.Uploaded
 	}
+	logger.Debug("uploading file", zap.Time("modtime", modtime))
 	// try to upload the file to the server
-	if err := server.Upload(ctx, t.Path); err != nil {
+	if err := server(ctx, t.Path); err != nil {
 		logger.Error("failed to upload file", zap.String("file", t.Path), zap.Error(err))
 		return t.Uploaded
 	}

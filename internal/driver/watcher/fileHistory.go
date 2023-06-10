@@ -191,14 +191,14 @@ func (f *FileHistory) Watch(ctx context.Context) error {
 	return errors.Join(notifyErr, dispatchErr, watcherErr)
 }
 
-// Merge info from two channel into one
+// Merge info from two channels into one
 func (f *FileHistory) merge(ctx context.Context, input1, input2, output chan fsnotify.Event) {
 	// screen events by extension, only matched extensions are forwarded
 	screen := func(event fsnotify.Event) {
 		ext := strings.ToLower(filepath.Ext(event.Name))
 		f.logger.Debug("screening event", zap.String("file", event.Name), zap.String("ext", ext))
 		if _, ok := f.fileTypes[ext]; !ok {
-			f.logger.Debug("Unrecognized extension", zap.String("file", event.Name))
+			f.logger.Debug("Unrecognized extension", zap.String("ext", ext), zap.String("file", event.Name))
 		} else {
 			output <- event
 		}
@@ -228,6 +228,7 @@ func (f *FileHistory) merge(ctx context.Context, input1, input2, output chan fsn
 
 // Load history file. The history file is a list of lines with date and path
 func (f *FileHistory) loadHistory() error {
+	logger := f.logger.With(zap.String("folder", f.folder))
 	// Make sure the history folder exists
 	if _, err := os.Stat(f.historyFolder); err != nil {
 		if !os.IsNotExist(err) {
@@ -259,19 +260,20 @@ func (f *FileHistory) loadHistory() error {
 		}
 		parts := strings.SplitN(line, ",", 2)
 		if len(parts) != 2 {
-			f.logger.Warn("invalid history line", zap.String("line", line))
+			logger.Warn("invalid history line", zap.String("line", line))
 			continue
 		}
 		timestamp, err := time.Parse(time.RFC3339, parts[0])
 		if err != nil {
-			f.logger.Warn("invalid date in history line", zap.String("line", line), zap.Error(err))
+			logger.Warn("invalid date in history line", zap.String("line", line), zap.Error(err))
 			continue
 		}
 		fname := parts[1]
 		if _, err := os.Stat(fname); err != nil {
-			f.logger.Warn("file from history no longer exists", zap.String("file", fname), zap.Error(err))
+			logger.Warn("file from history no longer exists", zap.String("file", fname), zap.Error(err))
 			continue
 		}
+		logger.Debug("loaded history line", zap.String("file", fname), zap.Time("date", timestamp))
 		history[fname] = fileTask{
 			Path:     fname,
 			Uploaded: timestamp,
