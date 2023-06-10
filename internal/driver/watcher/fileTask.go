@@ -101,7 +101,7 @@ func (t fileTask) triggered(ctx context.Context, logger *zap.Logger, server Serv
 	// for some reason only saves with resolution of seconds. So we must round before
 	// comparing, otherwise we always upload.
 	modtime := info.ModTime().Round(time.Second)
-	if modtime.Before(t.Uploaded) {
+	if !modtime.After(t.Uploaded) {
 		// The file has not been modified since the last upload
 		logger.Debug("file not modified")
 		return t.Uploaded
