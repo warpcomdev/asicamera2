@@ -45,17 +45,17 @@ func (r *peekReader) Close() error {
 // Do implements Client
 func (c debugClient) Do(req *http.Request) (*http.Response, error) {
 	logger := c.logger.With(zap.String("method", req.Method), zap.String("url", req.URL.String()), zap.Any("headers", req.Header))
-	var pr *peekReader
+	/*var pr *peekReader
 	if req.Body != nil {
 		pr = &peekReader{
 			reader: req.Body,
 		}
 		req.Body = pr
-	}
+	}*/
 	resp, err := c.client.Do(req)
-	if pr != nil {
+	/*if pr != nil {
 		logger = logger.With(zap.ByteString("body", pr.buffer.Bytes()))
-	}
+	}*/
 	logger.Debug("HTTP request")
 	return resp, err
 }

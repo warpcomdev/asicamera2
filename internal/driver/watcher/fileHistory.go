@@ -45,7 +45,7 @@ type FileHistory struct {
 }
 
 // New creates a new FileHistory object
-func New(logger *zap.Logger, historyFolder string, server Server, folder string, fileTypes []string, monitorFor time.Duration) (*FileHistory, error) {
+func New(logger *zap.Logger, historyFolder string, server Server, folder string, fileTypes []string, monitorFor time.Duration) *FileHistory {
 	// Generate unique history file name from folder name
 	hash := fnv.New64a()
 	hash.Write([]byte(folder))
@@ -67,7 +67,7 @@ func New(logger *zap.Logger, historyFolder string, server Server, folder string,
 	for _, fileType := range fileTypes {
 		f.fileTypes[strings.ToLower(fileType)] = struct{}{}
 	}
-	return f, nil
+	return f
 }
 
 // Return the time of the last file updated in the folder

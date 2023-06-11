@@ -11,13 +11,17 @@ import (
 	"time"
 )
 
+type Alert struct {
+	ID        string `json:"id"`
+	Timestamp string `json:"timestamp"`
+	Camera    string `json:"camera"`
+	Severity  string `json:"severity"`
+	Message   string `json:"message"`
+}
+
 type httpAlertRequest struct {
-	ID        string       `json:"id"`
-	Timestamp string       `json:"timestamp"`
-	Camera    string       `json:"camera"`
-	Severity  string       `json:"severity"`
-	Message   string       `json:"message"`
-	Buffer    bytes.Buffer `json:"-"`
+	Alert
+	Buffer bytes.Buffer `json:"-"`
 }
 
 // PostURL implements resource
@@ -29,7 +33,7 @@ func (har httpAlertRequest) PostURL(apiURL string) string {
 func (har httpAlertRequest) PostBody() (io.ReadCloser, error) {
 	if har.Buffer.Len() == 0 {
 		encoder := json.NewEncoder(&har.Buffer)
-		if err := encoder.Encode(har); err != nil {
+		if err := encoder.Encode(har.Alert); err != nil {
 			return nil, err
 		}
 	}
@@ -53,11 +57,13 @@ func (har httpAlertRequest) PutBody() (io.ReadCloser, error) {
 
 func (s *Server) Alert(ctx context.Context, authChan chan<- AuthRequest, id, severity, message string) {
 	alert := httpAlertRequest{
-		ID:        id,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Camera:    s.cameraID,
-		Severity:  severity,
-		Message:   message,
+		Alert: Alert{
+			ID:        id,
+			Timestamp: time.Now().Format(time.RFC3339),
+			Camera:    s.cameraID,
+			Severity:  severity,
+			Message:   message,
+		},
 	}
 	s.sendResource(ctx, authChan, alert, -1, false)
 }

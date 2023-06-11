@@ -82,14 +82,14 @@ func (s *Server) httpFolder(ctx context.Context, bo backoff.BackOff, authChan ch
 		}
 		folder = folderResponse.LocalPath
 		return nil
-	}, bo)
+	}, backoff.WithContext(bo, ctx))
 	bo.Reset()
 	return folder, err
 }
 
 // WatchFolder watches the folder for changes and notifies them in the folderChan
 func (s *Server) WatchFolder(ctx context.Context, authChan chan<- AuthRequest, folderChan chan<- string, interval time.Duration) {
-	bo := backoff.NewExponentialBackOff()
+	bo := eternalBackoff()
 	logger := s.auth.logger
 	timer := time.NewTimer(interval)
 	var lastFolder string

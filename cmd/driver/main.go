@@ -25,6 +25,21 @@ var (
 		Help: "Start timestamp of the app (unix)",
 	})
 
+	serviceStartMetric = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "service_start",
+		Help: "Start timestamp of the service (unix)",
+	})
+
+	serviceStopMetric = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "service_stop",
+		Help: "Stop timestamp of the service (unix)",
+	})
+
+	statusMetric = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "status",
+		Help: "Service status",
+	})
+
 	infoMetric = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "info",
@@ -53,7 +68,13 @@ func (p *program) Start(s service.Service) error {
 	}
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	p.Cancel = cancelFunc
-	go p.Run(ctx)
+	serviceStartMetric.SetToCurrentTime()
+	statusMetric.Set(1)
+	go func() {
+		defer serviceStopMetric.SetToCurrentTime()
+		defer statusMetric.Set(0)
+		p.Run(ctx)
+	}()
 	return nil
 }
 

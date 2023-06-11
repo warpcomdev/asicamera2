@@ -153,7 +153,7 @@ func (a auth) httpAuth(ctx context.Context, bo backoff.BackOff) (string, string,
 		authID = reply.ID
 		authToken = reply.Token
 		return nil
-	}, bo)
+	}, backoff.WithContext(bo, ctx))
 	// reset the backoff after we retried
 	bo.Reset()
 	return authID, authToken, authErr
@@ -174,7 +174,7 @@ type AuthRequest struct {
 // Attend to authentication queries in the channel
 func (a auth) WatchAuth(ctx context.Context, queries <-chan AuthRequest) {
 	logger := a.logger.With(zap.String("apiUrl", a.apiURL), zap.String("username", a.username))
-	bo := backoff.NewExponentialBackOff()
+	bo := eternalBackoff()
 	lastReply := AuthReply{}
 	for {
 		select {

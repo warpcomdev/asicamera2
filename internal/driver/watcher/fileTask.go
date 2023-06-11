@@ -2,15 +2,79 @@ package watcher
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 )
 
+var (
+	upload_detect = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "upload_detect",
+			Help: "Number of file update detections",
+		},
+		[]string{
+			"folder",
+		})
+
+	upload_dropped = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "upload_dropped",
+			Help: "Number of file update detections that did not trigger an update",
+		},
+		[]string{
+			"folder",
+		})
+
+	upload_success = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "upload_success",
+			Help: "Number of successful file uploads",
+		},
+		[]string{
+			"folder",
+		})
+
+	upload_error = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "upload_error",
+			Help: "Number of failed file uploads",
+		},
+		[]string{
+			"folder",
+		})
+
+	upload_cancel = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "upload_cancel",
+			Help: "Number of failed file uploads",
+		},
+		[]string{
+			"folder",
+		})
+
+	upload_duration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "upload_duration",
+			Help:    "Duration of file uploads",
+			Buckets: prometheus.ExponentialBuckets(1, 2, 16),
+		},
+		[]string{
+			"folder",
+		})
+)
+
 // Server is the interface that must be implemented by the server
-type Server func(ctx context.Context, path string) error
+type Server interface {
+	Upload(ctx context.Context, path string) error
+	Alert(ctx context.Context, id, severity, message string)
+}
 
 // fileTask is a file that needs to be uploaded
 type fileTask struct {
@@ -76,6 +140,8 @@ func (t fileTask) upload(ctx context.Context, logger *zap.Logger, server Server,
 			// and we are no longer interested in uploading it. Quit.
 			if !ok {
 				logger.Debug("file removed, quitting", zap.String("file", t.Path))
+				folder := filepath.Dir(t.Path)
+				upload_cancel.WithLabelValues(folder).Inc()
 				return
 			}
 			logger.Debug("reset of inactivity timer", zap.String("file", t.Path))
@@ -92,9 +158,14 @@ func (t fileTask) upload(ctx context.Context, logger *zap.Logger, server Server,
 func (t fileTask) triggered(ctx context.Context, logger *zap.Logger, server Server) time.Time {
 	// The upload has been triggered!
 	logger = logger.With(zap.String("file", t.Path), zap.Time("uploaded", t.Uploaded))
+	folder := filepath.Dir(t.Path)
+	upload_detect.WithLabelValues(folder).Inc()
 	info, err := os.Stat(t.Path)
+	alertID := fmt.Sprintf("upload-%s", t.Path)
 	if err != nil {
 		logger.Error("failed to stat file", zap.Error(err))
+		upload_error.WithLabelValues(folder).Inc()
+		server.Alert(ctx, alertID, "error", err.Error())
 		return t.Uploaded
 	}
 	// BEWARE: modtime reports time in nanoseconds, but the history file
@@ -104,13 +175,21 @@ func (t fileTask) triggered(ctx context.Context, logger *zap.Logger, server Serv
 	if !modtime.After(t.Uploaded) {
 		// The file has not been modified since the last upload
 		logger.Debug("file not modified")
+		upload_dropped.WithLabelValues(folder).Inc()
 		return t.Uploaded
 	}
 	logger.Debug("uploading file", zap.Time("modtime", modtime))
 	// try to upload the file to the server
-	if err := server(ctx, t.Path); err != nil {
+	start := time.Now()
+	if err := server.Upload(ctx, t.Path); err != nil {
 		logger.Error("failed to upload file", zap.String("file", t.Path), zap.Error(err))
+		upload_error.WithLabelValues(folder).Inc()
+		server.Alert(ctx, alertID, "error", err.Error())
 		return t.Uploaded
 	}
+	duration := time.Since(start)
+	upload_success.WithLabelValues(folder).Inc()
+	upload_duration.WithLabelValues(folder).Observe(duration.Seconds())
+	server.Alert(ctx, alertID, "info", fmt.Sprintf("uploaded %s in %s", t.Path, duration))
 	return info.ModTime()
 }

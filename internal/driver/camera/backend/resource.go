@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/cenkalti/backoff"
 	"go.uber.org/zap"
@@ -31,6 +32,15 @@ type resource interface {
 	PutBody() (io.ReadCloser, error)
 }
 
+func eternalBackoff() backoff.BackOff {
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = 1 * time.Second
+	bo.Multiplier = 2
+	bo.MaxInterval = 5 * time.Minute
+	bo.MaxElapsedTime = 0
+	return bo
+}
+
 func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, resource resource, maxRetries int, limitConcurrency bool) error {
 	logger := s.auth.logger
 	// Build the request for POST
@@ -41,7 +51,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 	}
 	logger = logger.With(zap.String("postURL", postURL))
 	// Build the request for PUT
-	var bo backoff.BackOff = backoff.NewExponentialBackOff()
+	var bo backoff.BackOff = eternalBackoff()
 	if maxRetries > 0 {
 		bo = backoff.WithMaxRetries(bo, uint64(maxRetries))
 	}
@@ -115,7 +125,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 			return err
 		}
 		return nil
-	}, bo)
+	}, backoff.WithContext(bo, ctx))
 	bo.Reset()
 	return err
 }

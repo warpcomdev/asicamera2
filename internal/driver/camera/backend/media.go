@@ -54,8 +54,8 @@ func (hmr httpMediaRequest) PutBody() (io.ReadCloser, error) {
 	return hmr.PostBody()
 }
 
-// Media a media resource to the server
-func (s *Server) Media(ctx context.Context, authChan chan AuthRequest, mimeType string, path string) error {
+// Media sends a media resource to the server
+func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeType string, path string) error {
 	id := fmt.Sprintf("%s_%s", s.cameraID, filepath.Base(path))
 	var mediaType string
 	if strings.HasPrefix(mimeType, "video") {
@@ -85,18 +85,6 @@ func (s *Server) Media(ctx context.Context, authChan chan AuthRequest, mimeType 
 			MimeType:  mimeType,
 		}
 		err = s.sendResource(ctx, authChan, file, 3, true)
-	}
-	if err != nil {
-		select {
-		case <-ctx.Done():
-			return err
-		default:
-			// Trigger an alert in the background
-			alert_id := fmt.Sprintf("upload_%s", id)
-			alert_severity := "error"
-			alert_msg := fmt.Sprintf("Failed to upload %s: %s", path, err.Error())
-			go s.Alert(ctx, authChan, alert_id, alert_severity, alert_msg)
-		}
 	}
 	return err
 }
