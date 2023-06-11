@@ -18,7 +18,7 @@ import (
 var (
 	compressionLatency = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name: "compression_latency",
+			Name: "asicamera_compression_latency",
 			Help: "JPEG Compression latency",
 			Buckets: []float64{
 				10, 30, 60, 120, 250, 500, 1000, 2500,
@@ -29,7 +29,7 @@ var (
 
 	streamingSessions = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "pipeline_sessions",
+			Name: "asicamera_pipeline_sessions",
 			Help: "Accumulated number of sessions",
 		},
 		[]string{"camera"},
@@ -37,7 +37,7 @@ var (
 
 	sessionDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name: "pipeline_session_duration",
+			Name: "asicamera_pipeline_session_duration",
 			Help: "Pipeline session duration (seconds)",
 			Buckets: []float64{
 				1, 60, 1800, 7200, 28800,
@@ -48,7 +48,7 @@ var (
 
 	compressionStatus = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "compression_status",
+			Name: "asicamera_compression_status",
 			Help: "Compression results by status",
 		},
 		[]string{"camera", "status"},

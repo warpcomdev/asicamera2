@@ -16,7 +16,7 @@ import (
 var (
 	upload_detect = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "upload_detect",
+			Name: "asicamera_upload_detect",
 			Help: "Number of file update detections",
 		},
 		[]string{
@@ -25,7 +25,7 @@ var (
 
 	upload_dropped = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "upload_dropped",
+			Name: "asicamera_upload_dropped",
 			Help: "Number of file update detections that did not trigger an update",
 		},
 		[]string{
@@ -34,7 +34,7 @@ var (
 
 	upload_success = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "upload_success",
+			Name: "asicamera_upload_success",
 			Help: "Number of successful file uploads",
 		},
 		[]string{
@@ -43,7 +43,7 @@ var (
 
 	upload_error = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "upload_error",
+			Name: "asicamera_upload_error",
 			Help: "Number of failed file uploads",
 		},
 		[]string{
@@ -52,7 +52,7 @@ var (
 
 	upload_cancel = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "upload_cancel",
+			Name: "asicamera_upload_cancel",
 			Help: "Number of failed file uploads",
 		},
 		[]string{
@@ -61,7 +61,7 @@ var (
 
 	upload_duration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "upload_duration",
+			Name:    "asicamera_upload_duration",
 			Help:    "Duration of file uploads",
 			Buckets: prometheus.ExponentialBuckets(1, 2, 16),
 		},

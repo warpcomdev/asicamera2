@@ -21,28 +21,28 @@ import (
 
 var (
 	startMetric = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "start",
+		Name: "asicamera_start",
 		Help: "Start timestamp of the app (unix)",
 	})
 
 	serviceStartMetric = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "service_start",
+		Name: "asicamera_service_start",
 		Help: "Start timestamp of the service (unix)",
 	})
 
 	serviceStopMetric = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "service_stop",
+		Name: "asicamera_service_stop",
 		Help: "Stop timestamp of the service (unix)",
 	})
 
 	statusMetric = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "status",
+		Name: "asicamera_service_status",
 		Help: "Service status",
 	})
 
 	infoMetric = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "info",
+			Name: "asicamera_service_info",
 			Help: "Service info",
 		},
 		[]string{
@@ -201,8 +201,8 @@ func main() {
 		logger.Fatal("new service failed", zap.Error(err))
 	}
 	args := flag.Args()
-	if len(args) > 1 {
-		err = service.Control(s, args[1])
+	if len(args) > 0 {
+		err = service.Control(s, args[0])
 		if err != nil {
 			logger.Fatal("service control failed", zap.Error(err))
 		}

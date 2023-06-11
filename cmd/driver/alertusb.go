@@ -14,7 +14,7 @@ import (
 var (
 	cameras = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "cameras",
+			Name: "asicamera_cameras",
 			Help: "Number of cameras connected",
 		},
 		[]string{

@@ -11,7 +11,7 @@ import (
 var (
 	compressionTime = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name: "compression_time",
+			Name: "asicamera_compression_time",
 			Help: "JPEG Compression time (seconds)",
 			Buckets: []float64{
 				0.010, 0.030, 0.060, 0.120, 0.250, 0.500, 1.000, 2.500,
@@ -22,7 +22,7 @@ var (
 
 	compressedSize = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name: "compressed_size",
+			Name: "asicamera_compressed_size",
 			Help: "Size of compressed frames (bytes)",
 			Buckets: []float64{
 				16384, 65535, 262144, 524288, 1048576, 2097152, 4194304,
