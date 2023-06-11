@@ -41,7 +41,14 @@ func eternalBackoff() backoff.BackOff {
 	return bo
 }
 
-func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, resource resource, maxRetries int, limitConcurrency bool) error {
+type sendOptions struct {
+	maxRetries       int
+	limitConcurrency bool
+	onlyPut          bool
+	onlyPost         bool
+}
+
+func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, resource resource, opts sendOptions) error {
 	logger := s.auth.logger
 	// Build the request for POST
 	postURL, err := validateURL(resource.PostURL(s.auth.apiURL))
@@ -52,8 +59,8 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 	logger = logger.With(zap.String("postURL", postURL))
 	// Build the request for PUT
 	var bo backoff.BackOff = eternalBackoff()
-	if maxRetries > 0 {
-		bo = backoff.WithMaxRetries(bo, uint64(maxRetries))
+	if opts.maxRetries > 0 {
+		bo = backoff.WithMaxRetries(bo, uint64(opts.maxRetries))
 	}
 	err = backoff.Retry(func() (returnErr error) {
 		defer func() {
@@ -61,35 +68,38 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 		}()
 		// If concurrency of this resource is controller, pick an item from the queue
 		// so only as many as the number of concurrent uploads is in transit
-		if limitConcurrency {
+		if opts.limitConcurrency {
 			<-s.queue
 			defer func() {
 				s.queue <- struct{}{}
 			}()
 		}
-		// Build the request.
-		postBody, err := resource.PostBody()
-		if err != nil {
-			logger.Error("failed to build request body", zap.Error(err))
-			return &backoff.PermanentError{Err: err}
+		var resp *http.Response
+		if !opts.onlyPut {
+			// Build the request.
+			postBody, err := resource.PostBody()
+			if err != nil {
+				logger.Error("failed to build request body", zap.Error(err))
+				return &backoff.PermanentError{Err: err}
+			}
+			defer postBody.Close()
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, postURL, postBody)
+			if err != nil {
+				logger.Error("failed to build request", zap.Error(err))
+				return &backoff.PermanentError{Err: err}
+			}
+			req.Header.Set("Content-Type", resource.PostType())
+			resp, err = s.auth.Do(ctx, req, authChan)
+			if resp != nil {
+				defer exhaust(resp.Body)
+			}
+			if err != nil {
+				logger.Error("failed to post data", zap.Error(err))
+				return err
+			}
 		}
-		defer postBody.Close()
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, postURL, postBody)
-		if err != nil {
-			logger.Error("failed to build request", zap.Error(err))
-			return &backoff.PermanentError{Err: err}
-		}
-		req.Header.Set("Content-Type", resource.PostType())
-		resp, err := s.auth.Do(ctx, req, authChan)
-		if resp != nil {
-			defer exhaust(resp.Body)
-		}
-		if err != nil {
-			logger.Error("failed to post data", zap.Error(err))
-			return err
-		}
-		// If POST failed, try PUT
-		if resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusInternalServerError {
+		// If only doing PUT, or POST failed and not only doing POST, try PUT
+		if !opts.onlyPost && (opts.onlyPut || resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusInternalServerError) {
 			putURL, err := validateURL(resource.PutURL(s.auth.apiURL))
 			if err != nil {
 				logger.Error("failed to validate put url", zap.Error(err))
@@ -119,7 +129,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 				return err
 			}
 		}
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
+		if resp != nil && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 			err = bodyToError(resp)
 			logger.Error("failed to put data", zap.Error(err))
 			return err

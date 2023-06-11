@@ -27,7 +27,8 @@ func monitorUSB(ctx context.Context, logger *zap.Logger, config Config, proxy *s
 	timer := time.NewTimer(0)
 	usbDetected := false // true if usb cammera has been detected once
 	usbMissing := false  // True if USB camera has gone from detected to missing
-	usbID := fmt.Sprintf("usb_connected_%s", config.CameraID)
+	alertName := "usb_connection"
+	usbID := fmt.Sprintf("%s_%s_%s", config.CameraID, alertName, time.Now().Format(time.RFC3339))
 	for {
 		select {
 		case <-ctx.Done():
@@ -40,7 +41,7 @@ func monitorUSB(ctx context.Context, logger *zap.Logger, config Config, proxy *s
 			}
 			if connectedCameras == 0 && (usbDetected || !usbMissing) {
 				logger.Error("No USB camera detected")
-				proxy.Alert(ctx, usbID, "error", "No USB camera detected")
+				proxy.SendAlert(ctx, usbID, alertName, "error", "No USB camera detected")
 				usbDetected = false
 				usbMissing = true
 			}
@@ -48,7 +49,10 @@ func monitorUSB(ctx context.Context, logger *zap.Logger, config Config, proxy *s
 				usbDetected = true
 				if usbMissing {
 					logger.Info("USB camera detected")
-					proxy.Alert(ctx, usbID, "info", "USB camera detected")
+					proxy.ClearAlert(ctx, usbID)
+					// Update usbID so next time there is a disconnection,
+					// it will be a new alert
+					usbID = fmt.Sprintf("%s_%s_%s", config.CameraID, alertName, time.Now().Format(time.RFC3339))
 					usbMissing = false
 				}
 			}

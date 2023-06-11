@@ -34,13 +34,27 @@ func (s serverProxy) Upload(ctx context.Context, path string) error {
 	return s.server.Media(ctx, s.authChan, mimeType, path)
 }
 
-// Alert implements the watcher.Server interface
-func (s serverProxy) Alert(ctx context.Context, id, severity, message string) {
+// SendAlert implements the watcher.Server interface
+func (s serverProxy) SendAlert(ctx context.Context, id, name, severity, message string) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.server.Alert(ctx, s.authChan, id, severity, message)
+		s.server.SendAlert(ctx, s.authChan, id, name, severity, message)
 	}()
+}
+
+// ClearAlert implements the watcher.Server interface
+func (s serverProxy) ClearAlert(ctx context.Context, id string) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.server.ClearAlert(ctx, s.authChan, id)
+	}()
+}
+
+// CameraID implements the watcher.Server interface
+func (s serverProxy) CameraID() string {
+	return s.cameraID
 }
 
 func slowEternalBackoff() backoff.BackOff {
@@ -104,21 +118,67 @@ func watchMedia(ctx context.Context, logger *zap.Logger, config Config, server *
 		watcherCtx, watcherCancel := context.WithCancel(ctx)
 		cancelPrevWatcher = watcherCancel
 		wg.Add(1)
+		// Do the folder watching in a separate goroutine, because
+		// the process runs for as long as the context is not interrupted,
+		// but we still must react if some new folder name arrives.
 		go func(folderUpdate string) {
 			defer wg.Done()
+			alertName := "watch_folder"
+			alertTime := time.Now()
+			alertID := fmt.Sprintf("%s_%s_%s", config.CameraID, alertName, alertTime.Format(time.RFC3339))
+			alertTriggered := false
 			bo := slowEternalBackoff()
-			alertID := fmt.Sprintf("watch-folder-%s", config.CameraID)
 			backoff.Retry(func() (returnError error) {
 				defer func() {
 					if returnError != nil {
 						logger.Error("folder watcher failed", zap.Error(returnError))
-						proxy.Alert(ctx, alertID, "error", returnError.Error())
 						returnError = backend.PermanentIfCancel(watcherCtx, returnError)
 					}
 				}()
 				logger.Info("started watching folder")
-				proxy.Alert(ctx, alertID, "info", "started watching folder "+folderUpdate)
-				return watch.Watch(watcherCtx)
+				// We will use an aux goroutine to detect if the watcher has been running long enough or not,
+				// and trigger an alert depending on the case
+				var (
+					watcherWG sync.WaitGroup
+					resetBO   bool
+					stop      = make(chan struct{}, 1)
+				)
+				defer close(stop)
+				watcherWG.Add(1)
+				// Send or clear an alarm, depending on how long does the watcher take
+				go func() {
+					defer watcherWG.Done()
+					select {
+					case <-watcherCtx.Done():
+						return
+					case <-time.After(30 * time.Second):
+						// the watcher has been running for 30 seconds,
+						// I think it's ok to clear the alert
+						if alertTriggered {
+							proxy.ClearAlert(ctx, alertID)
+						}
+						// Update alertID for next time
+						alertTime = time.Now()
+						alertID = fmt.Sprintf("%s_%s_%s", config.CameraID, alertName, alertTime.Format(time.RFC3339))
+						alertTriggered = false
+						// And reset backoff
+						resetBO = true
+					case <-stop:
+						// stopped before the timer, looks like the watcher didn't work...
+						if !alertTriggered {
+							proxy.SendAlert(ctx, alertID, alertName, "error", returnError.Error())
+							alertTriggered = true
+						}
+					}
+				}()
+				err := watch.Watch(watcherCtx)
+				watcherWG.Wait()
+				// If the alert goroutine says we must reset the backoff, do it
+				// in this same goroutine (bo object is not reentrant)
+				if resetBO {
+					bo.Reset()
+				}
+				return err
 			}, backoff.WithContext(bo, watcherCtx))
 		}(folderUpdate)
 	}

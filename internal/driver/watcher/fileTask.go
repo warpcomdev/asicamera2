@@ -72,8 +72,10 @@ var (
 
 // Server is the interface that must be implemented by the server
 type Server interface {
+	CameraID() string
 	Upload(ctx context.Context, path string) error
-	Alert(ctx context.Context, id, severity, message string)
+	SendAlert(ctx context.Context, id, name, severity, message string)
+	ClearAlert(ctx context.Context, id string)
 }
 
 // fileTask is a file that needs to be uploaded
@@ -161,11 +163,12 @@ func (t fileTask) triggered(ctx context.Context, logger *zap.Logger, server Serv
 	folder := filepath.Dir(t.Path)
 	upload_detect.WithLabelValues(folder).Inc()
 	info, err := os.Stat(t.Path)
-	alertID := fmt.Sprintf("upload-%s", t.Path)
+	alertName := "upload_file"
+	alertID := fmt.Sprintf("%s_%s_%s_%s", alertName, server.CameraID(), t.Path, time.Now().Format(time.RFC3339))
 	if err != nil {
 		logger.Error("failed to stat file", zap.Error(err))
 		upload_error.WithLabelValues(folder).Inc()
-		server.Alert(ctx, alertID, "error", err.Error())
+		server.SendAlert(ctx, alertID, alertName, "error", err.Error())
 		return t.Uploaded
 	}
 	// BEWARE: modtime reports time in nanoseconds, but the history file
@@ -184,12 +187,12 @@ func (t fileTask) triggered(ctx context.Context, logger *zap.Logger, server Serv
 	if err := server.Upload(ctx, t.Path); err != nil {
 		logger.Error("failed to upload file", zap.String("file", t.Path), zap.Error(err))
 		upload_error.WithLabelValues(folder).Inc()
-		server.Alert(ctx, alertID, "error", err.Error())
+		server.SendAlert(ctx, alertID, alertName, "error", err.Error())
 		return t.Uploaded
 	}
 	duration := time.Since(start)
 	upload_success.WithLabelValues(folder).Inc()
 	upload_duration.WithLabelValues(folder).Observe(duration.Seconds())
-	server.Alert(ctx, alertID, "info", fmt.Sprintf("uploaded %s in %s", t.Path, duration))
+	server.ClearAlert(ctx, alertID)
 	return info.ModTime()
 }

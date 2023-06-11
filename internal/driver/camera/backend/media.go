@@ -17,8 +17,8 @@ type httpMediaRequest struct {
 	ID        string       `json:"id"`
 	Timestamp string       `json:"timestamp"`
 	Camera    string       `json:"camera"`
-	Tags      []string     `json:"tag"`
-	MediaType string       `json:"media"` // picture or video
+	Tags      []string     `json:"tags,omitempty"`
+	MediaType string       `json:"-"` // picture or video
 	MimeType  string       `json:"-"`
 	Buffer    bytes.Buffer `json:"-"`
 }
@@ -69,13 +69,15 @@ func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeTyp
 	}
 	media := httpMediaRequest{
 		ID:        id,
-		Timestamp: time.Now().Format(time.RFC3339),
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Camera:    s.cameraID,
 		Tags:      []string{"automatic"},
 		MediaType: mediaType,
 		MimeType:  mimeType,
 	}
-	err := s.sendResource(ctx, authChan, media, 3, false)
+	err := s.sendResource(ctx, authChan, media, sendOptions{
+		maxRetries: 3,
+	})
 	if err == nil {
 		// post file body
 		file := &httpFileRequest{
@@ -84,7 +86,10 @@ func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeTyp
 			MediaType: mediaType,
 			MimeType:  mimeType,
 		}
-		err = s.sendResource(ctx, authChan, file, 3, true)
+		err = s.sendResource(ctx, authChan, file, sendOptions{
+			maxRetries:       3,
+			limitConcurrency: true,
+		})
 	}
 	return err
 }

@@ -12,11 +12,13 @@ import (
 )
 
 type Alert struct {
-	ID        string `json:"id"`
-	Timestamp string `json:"timestamp"`
-	Camera    string `json:"camera"`
-	Severity  string `json:"severity"`
-	Message   string `json:"message"`
+	ID         string `json:"id"`
+	Timestamp  string `json:"timestamp"`
+	Name       string `json:"name,omitempty"`
+	Camera     string `json:"camera,omitempty"`
+	Severity   string `json:"severity,omitempty"`
+	Message    string `json:"message,omitempty"`
+	ResolvedAt string `json:"resolved_at,omitempty"`
 }
 
 type httpAlertRequest struct {
@@ -55,15 +57,28 @@ func (har httpAlertRequest) PutBody() (io.ReadCloser, error) {
 	return har.PostBody()
 }
 
-func (s *Server) Alert(ctx context.Context, authChan chan<- AuthRequest, id, severity, message string) {
+func (s *Server) SendAlert(ctx context.Context, authChan chan<- AuthRequest, id, name, severity, message string) {
 	alert := httpAlertRequest{
 		Alert: Alert{
 			ID:        id,
-			Timestamp: time.Now().Format(time.RFC3339),
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Name:      name,
 			Camera:    s.cameraID,
 			Severity:  severity,
 			Message:   message,
 		},
 	}
-	s.sendResource(ctx, authChan, alert, -1, false)
+	s.sendResource(ctx, authChan, alert, sendOptions{onlyPost: true, maxRetries: 3})
+}
+
+func (s *Server) ClearAlert(ctx context.Context, authChan chan<- AuthRequest, id string) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	alert := httpAlertRequest{
+		Alert: Alert{
+			ID:         id,
+			Timestamp:  now,
+			ResolvedAt: now,
+		},
+	}
+	s.sendResource(ctx, authChan, alert, sendOptions{onlyPut: true, maxRetries: 3})
 }
