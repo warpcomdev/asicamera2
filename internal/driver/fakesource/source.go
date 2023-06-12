@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 // Source of frames
@@ -73,7 +73,7 @@ type ResumableSource struct {
 	CancelFunc      func()
 }
 
-func (rs *ResumableSource) Start(*zap.Logger) error {
+func (rs *ResumableSource) Start(servicelog.Logger) error {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	rs.CancelFunc = cancelFunc
 	go rs.Run(ctx, rs.FramesPerSecond)

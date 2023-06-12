@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 // validateURL validates a URL and returns it if valid
@@ -53,10 +53,10 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 	// Build the request for POST
 	postURL, err := validateURL(resource.PostURL(s.auth.apiURL))
 	if err != nil {
-		logger.Error("failed to validate post url", zap.Error(err))
+		logger.Error("failed to validate post url", servicelog.Error(err))
 		return err
 	}
-	logger = logger.With(zap.String("postURL", postURL))
+	logger = logger.With(servicelog.String("postURL", postURL))
 	// Build the request for PUT
 	var bo backoff.BackOff = eternalBackoff()
 	if opts.maxRetries > 0 {
@@ -79,13 +79,13 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 			// Build the request.
 			postBody, err := resource.PostBody()
 			if err != nil {
-				logger.Error("failed to build request body", zap.Error(err))
+				logger.Error("failed to build request body", servicelog.Error(err))
 				return &backoff.PermanentError{Err: err}
 			}
 			defer postBody.Close()
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, postURL, postBody)
 			if err != nil {
-				logger.Error("failed to build request", zap.Error(err))
+				logger.Error("failed to build request", servicelog.Error(err))
 				return &backoff.PermanentError{Err: err}
 			}
 			req.Header.Set("Content-Type", resource.PostType())
@@ -94,7 +94,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 				defer exhaust(resp.Body)
 			}
 			if err != nil {
-				logger.Error("failed to post data", zap.Error(err))
+				logger.Error("failed to post data", servicelog.Error(err))
 				return err
 			}
 		}
@@ -102,7 +102,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 		if !opts.onlyPost && (opts.onlyPut || resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusInternalServerError) {
 			putURL, err := validateURL(resource.PutURL(s.auth.apiURL))
 			if err != nil {
-				logger.Error("failed to validate put url", zap.Error(err))
+				logger.Error("failed to validate put url", servicelog.Error(err))
 				return &backoff.PermanentError{Err: err}
 			}
 			if putURL == "" {
@@ -110,13 +110,13 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 			}
 			putBody, err := resource.PutBody()
 			if err != nil {
-				logger.Error("failed to build request body", zap.Error(err))
+				logger.Error("failed to build request body", servicelog.Error(err))
 				return &backoff.PermanentError{Err: err}
 			}
 			defer putBody.Close()
 			req, err := http.NewRequestWithContext(ctx, http.MethodPut, putURL, putBody)
 			if err != nil {
-				logger.Error("failed to build request", zap.Error(err))
+				logger.Error("failed to build request", servicelog.Error(err))
 				return err
 			}
 			req.Header.Set("Content-Type", "application/json")
@@ -125,13 +125,13 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 				defer exhaust(resp.Body)
 			}
 			if err != nil {
-				logger.Error("failed to put resource", zap.Error(err))
+				logger.Error("failed to put resource", servicelog.Error(err))
 				return err
 			}
 		}
 		if resp != nil && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 			err = bodyToError(resp)
-			logger.Error("failed to put data", zap.Error(err))
+			logger.Error("failed to put data", servicelog.Error(err))
 			return err
 		}
 		return nil

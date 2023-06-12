@@ -10,7 +10,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 var (
@@ -85,7 +85,7 @@ type fileTask struct {
 	Events   chan fsnotify.Event
 }
 
-func (t fileTask) upload(ctx context.Context, logger *zap.Logger, server Server, events chan fsnotify.Event, tasks chan<- fileTask, monitorFor time.Duration) {
+func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server Server, events chan fsnotify.Event, tasks chan<- fileTask, monitorFor time.Duration) {
 	// Notify when we are done
 	defer func() {
 		tasks <- t
@@ -120,14 +120,14 @@ func (t fileTask) upload(ctx context.Context, logger *zap.Logger, server Server,
 			// If an upload is completed, we must check the sequence number.
 			// if it matches the last request triggered, then we are good to leave.
 			// otherwise, we must wait for another completion
-			logger.Debug("upload completed", zap.String("file", t.Path), zap.Int("trigger", triggerNumber))
+			logger.Debug("upload completed", servicelog.String("file", t.Path), servicelog.Int("trigger", triggerNumber))
 			if !ok || triggerNumber >= triggersSent-1 {
 				return
 			}
 			break
 		case <-inactivity.C:
 			// When the inactivity timer expires, trigger an upload
-			logger.Debug("inactivity expired, triggering upload", zap.String("file", t.Path), zap.Duration("monitorFor", monitorFor))
+			logger.Debug("inactivity expired, triggering upload", servicelog.String("file", t.Path), servicelog.Duration("monitorFor", monitorFor))
 			select {
 			case triggered <- triggersSent:
 				// Update the sequence number so we know which trigger
@@ -141,12 +141,12 @@ func (t fileTask) upload(ctx context.Context, logger *zap.Logger, server Server,
 			// If the event channel is closed, the file has been removed
 			// and we are no longer interested in uploading it. Quit.
 			if !ok {
-				logger.Debug("file removed, quitting", zap.String("file", t.Path))
+				logger.Debug("file removed, quitting", servicelog.String("file", t.Path))
 				folder := filepath.Dir(t.Path)
 				upload_cancel.WithLabelValues(folder).Inc()
 				return
 			}
-			logger.Debug("reset of inactivity timer", zap.String("file", t.Path))
+			logger.Debug("reset of inactivity timer", servicelog.String("file", t.Path))
 			// Otherwise, reset the inactivity timer
 			if !inactivity.Stop() {
 				<-inactivity.C
@@ -157,16 +157,16 @@ func (t fileTask) upload(ctx context.Context, logger *zap.Logger, server Server,
 	}
 }
 
-func (t fileTask) triggered(ctx context.Context, logger *zap.Logger, server Server) time.Time {
+func (t fileTask) triggered(ctx context.Context, logger servicelog.Logger, server Server) time.Time {
 	// The upload has been triggered!
-	logger = logger.With(zap.String("file", t.Path), zap.Time("uploaded", t.Uploaded))
+	logger = logger.With(servicelog.String("file", t.Path), servicelog.Time("uploaded", t.Uploaded))
 	folder := filepath.Dir(t.Path)
 	upload_detect.WithLabelValues(folder).Inc()
 	info, err := os.Stat(t.Path)
 	alertName := "upload_file"
 	alertID := fmt.Sprintf("%s_%s_%s_%s", alertName, server.CameraID(), t.Path, time.Now().Format(time.RFC3339))
 	if err != nil {
-		logger.Error("failed to stat file", zap.Error(err))
+		logger.Error("failed to stat file", servicelog.Error(err))
 		upload_error.WithLabelValues(folder).Inc()
 		server.SendAlert(ctx, alertID, alertName, "error", err.Error())
 		return t.Uploaded
@@ -181,11 +181,11 @@ func (t fileTask) triggered(ctx context.Context, logger *zap.Logger, server Serv
 		upload_dropped.WithLabelValues(folder).Inc()
 		return t.Uploaded
 	}
-	logger.Debug("uploading file", zap.Time("modtime", modtime))
+	logger.Debug("uploading file", servicelog.Time("modtime", modtime))
 	// try to upload the file to the server
 	start := time.Now()
 	if err := server.Upload(ctx, t.Path); err != nil {
-		logger.Error("failed to upload file", zap.String("file", t.Path), zap.Error(err))
+		logger.Error("failed to upload file", servicelog.String("file", t.Path), servicelog.Error(err))
 		upload_error.WithLabelValues(folder).Inc()
 		server.SendAlert(ctx, alertID, alertName, "error", err.Error())
 		return t.Uploaded

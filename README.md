@@ -12,7 +12,7 @@ To compile the source code in windows, you need both [golang](https://go.dev/doc
 
 - Create folder `C:\AsiCamera`
 - Copy files:
-  - `driver.exe`
+  - `asicamera2.exe`
   - `ASICamera2.dll`
 - Create file:
   - `config.toml`
@@ -24,4 +24,4 @@ To compile the source code in windows, you need both [golang](https://go.dev/doc
 
 - Enter directory `C:\AsiCamera` in a privileged shell
 - Run:
-  - `.\driver.exe uninstall`
+  - `.\asicamera2.exe uninstall`

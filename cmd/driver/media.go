@@ -8,13 +8,13 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
-	"github.com/warpcomdev/asicamera2/internal/driver/camera/backend"
+	"github.com/warpcomdev/asicamera2/internal/driver/backend"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 	"github.com/warpcomdev/asicamera2/internal/driver/watcher"
-	"go.uber.org/zap"
 )
 
 type serverProxy struct {
-	logger    *zap.Logger
+	logger    servicelog.Logger
 	server    *backend.Server
 	authChan  chan<- backend.AuthRequest
 	wg        *sync.WaitGroup
@@ -28,7 +28,7 @@ func (s serverProxy) Upload(ctx context.Context, path string) error {
 	ext := normalizeExtension(filepath.Ext(path))
 	mimeType, ok := s.mimeTypes[ext]
 	if !ok {
-		logger.Error("failed to detect media type", zap.String("path", path))
+		logger.Error("failed to detect media type", servicelog.String("path", path))
 		return nil
 	}
 	return s.server.Media(ctx, s.authChan, mimeType, path)
@@ -66,7 +66,7 @@ func slowEternalBackoff() backoff.BackOff {
 	return bo
 }
 
-func watchMedia(ctx context.Context, logger *zap.Logger, config Config, server *backend.Server) {
+func watchMedia(ctx context.Context, logger servicelog.Logger, config Config, server *backend.Server) {
 	authChan := make(chan backend.AuthRequest, 16)
 	defer close(authChan)
 	var wg sync.WaitGroup
@@ -112,7 +112,7 @@ func watchMedia(ctx context.Context, logger *zap.Logger, config Config, server *
 			cancelPrevWatcher()
 			cancelPrevWatcher = nil
 		}
-		logger = logger.With(zap.String("folder", folderUpdate))
+		logger = logger.With(servicelog.String("folder", folderUpdate))
 		// Keep trying to watch until the folder name changes
 		watch := watcher.New(logger, config.HistoryFolder, proxy, folderUpdate, config.FileTypes(), time.Duration(config.MonitorForMinutes)*time.Minute)
 		watcherCtx, watcherCancel := context.WithCancel(ctx)
@@ -131,7 +131,7 @@ func watchMedia(ctx context.Context, logger *zap.Logger, config Config, server *
 			backoff.Retry(func() (returnError error) {
 				defer func() {
 					if returnError != nil {
-						logger.Error("folder watcher failed", zap.Error(returnError))
+						logger.Error("folder watcher failed", servicelog.Error(returnError))
 						returnError = backend.PermanentIfCancel(watcherCtx, returnError)
 					}
 				}()

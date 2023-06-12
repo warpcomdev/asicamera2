@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 type httpFolderResponse struct {
@@ -43,13 +43,13 @@ func (s *Server) httpFolder(ctx context.Context, bo backoff.BackOff, authChan ch
 	// Build the request
 	parsedURL, err := url.Parse(s.auth.apiURL + "/api/camera/" + url.PathEscape(s.cameraID))
 	if err != nil {
-		logger.Error("failed to parse auth url", zap.Error(err))
+		logger.Error("failed to parse auth url", servicelog.Error(err))
 		return "", err
 	}
 	reqURL := parsedURL.String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		logger.Error("failed to build request", zap.Error(err))
+		logger.Error("failed to build request", servicelog.Error(err))
 		return "", err
 	}
 	var folder string
@@ -62,7 +62,7 @@ func (s *Server) httpFolder(ctx context.Context, bo backoff.BackOff, authChan ch
 			defer exhaust(resp.Body)
 		}
 		if err != nil {
-			logger.Error("failed to get folder", zap.Error(err))
+			logger.Error("failed to get folder", servicelog.Error(err))
 			return err
 		}
 		if resp.Body == nil {
@@ -71,13 +71,13 @@ func (s *Server) httpFolder(ctx context.Context, bo backoff.BackOff, authChan ch
 		}
 		if resp.StatusCode != http.StatusOK {
 			err = bodyToError(resp)
-			logger.Error("failed to get folder", zap.Error(err))
+			logger.Error("failed to get folder", servicelog.Error(err))
 			return err
 		}
 		var folderResponse httpFolderResponse
 		decoder := json.NewDecoder(resp.Body)
 		if err := decoder.Decode(&folderResponse); err != nil {
-			logger.Error("failed to decode response", zap.Error(err))
+			logger.Error("failed to decode response", servicelog.Error(err))
 			return err
 		}
 		folder = folderResponse.LocalPath
@@ -96,7 +96,7 @@ func (s *Server) WatchFolder(ctx context.Context, authChan chan<- AuthRequest, f
 	for {
 		folder, err := s.httpFolder(ctx, bo, authChan)
 		if err != nil {
-			logger.Error("failed to get folder", zap.Error(err))
+			logger.Error("failed to get folder", servicelog.Error(err))
 			continue
 		}
 		if folder != lastFolder {

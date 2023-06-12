@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/warpcomdev/asicamera2/internal/driver/jpeg"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 type frame struct {
@@ -80,7 +80,7 @@ func (s *Source) Next(ctx context.Context, img *jpeg.Image) (jpeg.SrcFrame, erro
 	}
 }
 
-func (rs *Source) Start(logger *zap.Logger) error {
+func (rs *Source) Start(logger servicelog.Logger) error {
 	var err error
 	rs.watcher, err = Start(logger, rs.root, rs.match)
 	if err != nil {
@@ -95,7 +95,7 @@ func (rs *Source) Start(logger *zap.Logger) error {
 		for path := range watcher.Updates {
 			info, err := os.Stat(path)
 			if err != nil {
-				logger.Error("failed to stat file", zap.String("path", path), zap.Error(err))
+				logger.Error("failed to stat file", servicelog.String("path", path), servicelog.Error(err))
 				continue
 			}
 			if info.IsDir() {
@@ -114,7 +114,7 @@ func (rs *Source) Start(logger *zap.Logger) error {
 			go func(path string) {
 				<-time.After(5 * time.Second)
 				if err := rs.readImage(path); err != nil {
-					logger.Error("failed to refresh image", zap.String("path", path), zap.Error(err))
+					logger.Error("failed to refresh image", servicelog.String("path", path), servicelog.Error(err))
 				}
 			}(path)
 			latestFile = path
@@ -123,10 +123,10 @@ func (rs *Source) Start(logger *zap.Logger) error {
 	// seed with newest file
 	newest, err := newestFile(logger, rs.root, rs.match, []string{".jpg", ".jpeg"})
 	if err != nil {
-		logger.Error("failed to get newest file", zap.Error(err))
+		logger.Error("failed to get newest file", servicelog.Error(err))
 	} else {
 		if err := rs.readImage(newest); err != nil {
-			logger.Error("failed to read file", zap.String("path", newest), zap.Error(err))
+			logger.Error("failed to read file", servicelog.String("path", newest), servicelog.Error(err))
 		}
 	}
 	return nil
@@ -167,7 +167,7 @@ func (rs *Source) Stop() {
 	rs.images[1].Free()
 }
 
-func New(logger *zap.Logger, root string, match Matcher) (*Source, error) {
+func New(logger servicelog.Logger, root string, match Matcher) (*Source, error) {
 	return &Source{
 		root:  root,
 		match: match,

@@ -3,7 +3,7 @@ package backend
 import (
 	"time"
 
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 type Server struct {
@@ -22,7 +22,7 @@ type Config struct {
 }
 
 // Builds a new server
-func New(logger *zap.Logger, client Client, config Config) *Server {
+func New(logger servicelog.Logger, client Client, config Config) *Server {
 	concurrency := config.Concurrency
 	if concurrency < 1 {
 		concurrency = 1

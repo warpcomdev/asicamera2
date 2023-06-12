@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 // Source of frames
@@ -23,7 +23,7 @@ type Matcher interface {
 	MatchString(string) bool
 }
 
-func Start(logger *zap.Logger, root string, match Matcher) (*Watcher, error) {
+func Start(logger servicelog.Logger, root string, match Matcher) (*Watcher, error) {
 	var (
 		w   Watcher
 		err error
@@ -42,7 +42,7 @@ func Start(logger *zap.Logger, root string, match Matcher) (*Watcher, error) {
 	return &w, nil
 }
 
-func (w *Watcher) add(logger *zap.Logger, path string, match Matcher) error {
+func (w *Watcher) add(logger servicelog.Logger, path string, match Matcher) error {
 	// Read directorios and add to watcher
 	subdirs, err := os.ReadDir(path)
 	if err != nil {
@@ -76,7 +76,7 @@ func (w *Watcher) Close() error {
 	return w.watcher.Close()
 }
 
-func (w *Watcher) rescan(logger *zap.Logger, root string, match Matcher) error {
+func (w *Watcher) rescan(logger servicelog.Logger, root string, match Matcher) error {
 	// Set all folders to false and add again
 	for path := range w.folders {
 		w.folders[path] = false
@@ -89,7 +89,7 @@ func (w *Watcher) rescan(logger *zap.Logger, root string, match Matcher) error {
 	for path, fresh := range w.folders {
 		if !fresh {
 			if err := w.watcher.Remove(path); err != nil {
-				logger.Error("failed to remove watch", zap.String("path", path))
+				logger.Error("failed to remove watch", servicelog.String("path", path))
 			} else {
 				removeList = append(removeList, path)
 			}
@@ -109,7 +109,7 @@ func (w *Watcher) rescan(logger *zap.Logger, root string, match Matcher) error {
 }
 
 // Watch folder and subfolders
-func (w *Watcher) watch(logger *zap.Logger, root string, match Matcher) {
+func (w *Watcher) watch(logger servicelog.Logger, root string, match Matcher) {
 	defer close(w.Updates)
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -118,25 +118,25 @@ func (w *Watcher) watch(logger *zap.Logger, root string, match Matcher) {
 		case <-ticker.C:
 			// Rescan every five minutes, in case we miss some directory
 			if err := w.rescan(logger, root, match); err != nil {
-				logger.Error("rescan failed", zap.Error(err))
+				logger.Error("rescan failed", servicelog.Error(err))
 			}
 			break
 		case event, ok := <-w.watcher.Events:
 			if !ok {
 				return
 			}
-			logger.Info("notify event", zap.String("name", event.Name), zap.Int("op", int(event.Op)), zap.String("op_string", event.Op.String()))
+			logger.Info("notify event", servicelog.String("name", event.Name), servicelog.Int("op", int(event.Op)), servicelog.String("op_string", event.Op.String()))
 			if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
 				info, err := os.Stat(event.Name)
 				if err != nil {
-					logger.Error("failed to stat event", zap.String("name", event.Name), zap.Error(err))
+					logger.Error("failed to stat event", servicelog.String("name", event.Name), servicelog.Error(err))
 				} else {
 					if info.IsDir() {
 						if _, found := w.folders[event.Name]; !found {
 							if err := w.watcher.Add(event.Name); err != nil {
-								logger.Error("failed to monitor folder", zap.String("name", event.Name), zap.Error(err))
+								logger.Error("failed to monitor folder", servicelog.String("name", event.Name), servicelog.Error(err))
 							} else {
-								logger.Info("monitoring new folder", zap.String("name", event.Name))
+								logger.Info("monitoring new folder", servicelog.String("name", event.Name))
 								w.folders[event.Name] = true
 							}
 						}
@@ -148,9 +148,9 @@ func (w *Watcher) watch(logger *zap.Logger, root string, match Matcher) {
 			if event.Has(fsnotify.Remove) {
 				if _, found := w.folders[event.Name]; found {
 					if err := w.watcher.Remove(event.Name); err != nil {
-						logger.Error("failed to remove folder", zap.String("name", event.Name), zap.Error(err))
+						logger.Error("failed to remove folder", servicelog.String("name", event.Name), servicelog.Error(err))
 					} else {
-						logger.Info("stopped monitoring folder", zap.String("name", event.Name))
+						logger.Info("stopped monitoring folder", servicelog.String("name", event.Name))
 						delete(w.folders, event.Name)
 					}
 				}
@@ -160,13 +160,13 @@ func (w *Watcher) watch(logger *zap.Logger, root string, match Matcher) {
 			if !ok {
 				return
 			}
-			logger.Error("notify watcher failed", zap.Error(err))
+			logger.Error("notify watcher failed", servicelog.Error(err))
 			break
 		}
 	}
 }
 
-func newestFile(logger *zap.Logger, root string, dirMatch Matcher, fileExt []string) (string, error) {
+func newestFile(logger servicelog.Logger, root string, dirMatch Matcher, fileExt []string) (string, error) {
 	// Locate newest File
 	var (
 		newestPath string
@@ -174,7 +174,7 @@ func newestFile(logger *zap.Logger, root string, dirMatch Matcher, fileExt []str
 	)
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			logger.Error("failed to walk path", zap.String("path", path), zap.Error(err))
+			logger.Error("failed to walk path", servicelog.String("path", path), servicelog.Error(err))
 			return err
 		}
 		if d.IsDir() {

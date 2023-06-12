@@ -8,7 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/warpcomdev/asicamera2/internal/driver/camera"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 var (
@@ -23,7 +23,7 @@ var (
 )
 
 // alert on USB disconnection
-func monitorUSB(ctx context.Context, logger *zap.Logger, config Config, proxy *serverProxy) {
+func monitorUSB(ctx context.Context, logger servicelog.Logger, config Config, proxy *serverProxy) {
 	timer := time.NewTimer(0)
 	usbDetected := false // true if usb cammera has been detected once
 	usbMissing := false  // True if USB camera has gone from detected to missing
@@ -37,7 +37,7 @@ func monitorUSB(ctx context.Context, logger *zap.Logger, config Config, proxy *s
 			connectedCameras, err := camera.ASIGetNumOfConnectedCameras()
 			if err != nil {
 				connectedCameras = 0
-				logger.Error("failed to get number of connected cameras", zap.Error(err))
+				logger.Error("failed to get number of connected cameras", servicelog.Error(err))
 			}
 			if connectedCameras == 0 && (usbDetected || !usbMissing) {
 				logger.Error("No USB camera detected")

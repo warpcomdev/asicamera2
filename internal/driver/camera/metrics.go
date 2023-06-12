@@ -7,7 +7,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 var (
@@ -86,7 +86,7 @@ var (
 	)
 )
 
-func (c *ASICamera) Monitor(ctx context.Context, logger *zap.Logger, interval time.Duration) {
+func (c *ASICamera) Monitor(ctx context.Context, logger servicelog.Logger, interval time.Duration) {
 	metrics := map[ASI_CONTROL_TYPE]*prometheus.GaugeVec{
 		ASI_OVERCLOCK:         controlTypeOverclock,
 		ASI_TEMPERATURE:       controlTypeTemperature,
@@ -107,7 +107,7 @@ func (c *ASICamera) Monitor(ctx context.Context, logger *zap.Logger, interval ti
 			currentInterval = interval
 			func() { // to defer
 				if err := c.Open(); err != nil {
-					logger.Error("Failed to open camera", zap.Error(err))
+					logger.Error("Failed to open camera", servicelog.Error(err))
 					return
 				}
 				defer c.Done()
@@ -115,7 +115,7 @@ func (c *ASICamera) Monitor(ctx context.Context, logger *zap.Logger, interval ti
 					// Get all the metrics the camera supports
 					all_caps, err := c.ASIGetControlCaps()
 					if err != nil {
-						logger.Error("Failed to get caps", zap.Error(err))
+						logger.Error("Failed to get caps", servicelog.Error(err))
 						return
 					}
 					// Only monitor supported metrics
@@ -141,7 +141,7 @@ func (c *ASICamera) Monitor(ctx context.Context, logger *zap.Logger, interval ti
 					alive := 0
 					metric, _, err := asiGetControlValue(c.CameraID, c.SerialNumber, controlType)
 					if err != nil {
-						logger.Error("faied to read control value", zap.Error(err), zap.String("controlType", controlType.String()))
+						logger.Error("faied to read control value", servicelog.Error(err), servicelog.String("controlType", controlType.String()))
 						alive = 0
 					} else {
 						gauge := metrics[controlType]

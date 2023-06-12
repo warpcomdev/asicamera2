@@ -16,7 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/warpcomdev/asicamera2/internal/driver/camera"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 var (
@@ -53,7 +53,7 @@ var (
 )
 
 type program struct {
-	Logger *zap.Logger
+	Logger servicelog.Logger
 	Config Config
 	Cancel func()
 }
@@ -158,31 +158,47 @@ func main() {
 		panic(err)
 	}
 
-	var logger *zap.Logger
-	if config.Debug {
-		logger, err = zap.NewDevelopment()
-	} else {
-		logger, err = zap.NewProduction()
+	prg := &program{
+		Logger: nil,
+		Config: config,
 	}
+	s, err := service.New(prg, svcConfig)
 	if err != nil {
-		log.Fatalf("can't initialize zap logger: %v", err)
+		log.Fatal("new service failed", err)
 	}
+
+	// Setup logging
+	errs := make(chan error, 16)
+	go func() {
+		for {
+			err := <-errs
+			if err != nil {
+				log.Print(err)
+			}
+		}
+	}()
+	rootLogger, err := s.Logger(errs)
+	if err != nil {
+		log.Fatal(err)
+	}
+	logger := servicelog.New(rootLogger, config.Debug)
+	prg.Logger = logger
 	// Avoid stack traces below panic level
-	logger = logger.WithOptions(zap.AddStacktrace(zap.DPanicLevel))
+	// logger = logger.WithOptions(servicelog.AddStacktrace(servicelog.DPanicLevel))
 	// Set logging level
-	defer logger.Sync()
+	// defer logger.Sync()
 
 	anonimizedConfig := config
 	anonimizedConfig.ApiKey = "********"
-	logger.Info("config", zap.Any("config", anonimizedConfig))
+	logger.Info("config", servicelog.Any("config", anonimizedConfig))
 
 	// Get SDK version
 	apiVersion, err := camera.ASIGetSDKVersion()
 	if err != nil {
-		logger.Fatal("Failed to get SDK version", zap.Error(err))
+		logger.Fatal("Failed to get SDK version", servicelog.Error(err))
 		return
 	}
-	logger.Info("ASICamera2 SDK version", zap.String("apiVersion", apiVersion))
+	logger.Info("ASICamera2 SDK version", servicelog.String("apiVersion", apiVersion))
 
 	// Register startup metrics
 	startTime := time.Now()
@@ -192,19 +208,11 @@ func main() {
 		apiVersion,
 	).Set(1)
 
-	prg := &program{
-		Logger: logger,
-		Config: config,
-	}
-	s, err := service.New(prg, svcConfig)
-	if err != nil {
-		logger.Fatal("new service failed", zap.Error(err))
-	}
 	args := flag.Args()
 	if len(args) > 0 {
 		err = service.Control(s, args[0])
 		if err != nil {
-			logger.Fatal("service control failed", zap.Error(err))
+			logger.Fatal("service control failed", servicelog.Error(err))
 		}
 		return
 	}
@@ -212,6 +220,6 @@ func main() {
 	logger.Info("starting service manager")
 	err = s.Run()
 	if err != nil {
-		logger.Error("run failed", zap.Error(err))
+		logger.Error("run failed", servicelog.Error(err))
 	}
 }

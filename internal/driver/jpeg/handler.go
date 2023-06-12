@@ -3,11 +3,11 @@ package jpeg
 import (
 	"net/http"
 
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 // Track https://github.com/golang/go/issues/54136 for improvements on timeout handling
-func Handler(logger *zap.Logger, mgr *SessionManager) http.Handler {
+func Handler(logger servicelog.Logger, mgr *SessionManager) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" && r.Method != "HEAD" {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -16,7 +16,7 @@ func Handler(logger *zap.Logger, mgr *SessionManager) http.Handler {
 
 		session, err := mgr.Acquire(logger)
 		if err != nil {
-			logger.Error("Acquiring session failed", zap.Error(err))
+			logger.Error("Acquiring session failed", servicelog.Error(err))
 			http.Error(w, "Acquiring session failed", http.StatusInternalServerError)
 			return
 		}

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/warpcomdev/asicamera2/internal/driver/camera/backend"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/backend"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 type Config struct {
@@ -64,6 +64,7 @@ func (config *Config) Check() error {
 			".ogg":       "video/ogg",
 			".quicktime": "video/quicktime",
 			".webm":      "video/webm",
+			".avi":       "video/x-msvideo",
 			".jpg":       "image/jpeg",
 			".png":       "image/png",
 		}
@@ -100,15 +101,15 @@ func (config *Config) Check() error {
 	return nil
 }
 
-func (c Config) FileTypes() []string {
-	buffer := make([]string, 0, len(c.MimeTypes))
+func (c Config) FileTypes() map[string]struct{} {
+	buffer := make(map[string]struct{}, len(c.MimeTypes))
 	for k := range c.MimeTypes {
-		buffer = append(buffer, k)
+		buffer[k] = struct{}{}
 	}
 	return buffer
 }
 
-func (config Config) Server(logger *zap.Logger) *backend.Server {
+func (config Config) Server(logger servicelog.Logger) *backend.Server {
 	var client backend.Client = &http.Client{
 		Timeout: time.Duration(config.ApiTimeoutSeconds) * time.Second,
 		Transport: &http.Transport{

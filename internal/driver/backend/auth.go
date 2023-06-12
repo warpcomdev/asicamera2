@@ -10,7 +10,7 @@ import (
 	"net/http"
 
 	"github.com/cenkalti/backoff"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 type serverError string
@@ -35,7 +35,7 @@ type Client interface {
 }
 
 type auth struct {
-	logger   *zap.Logger
+	logger   servicelog.Logger
 	apiURL   string
 	username string
 	password string
@@ -86,7 +86,7 @@ func exhaust(body io.ReadCloser) {
 // httpAuth authenticates with the server and returns the httpAuth ID and token
 // BEWARE: backoff is not thread-safe, do not share amongst goroutines
 func (a auth) httpAuth(ctx context.Context, bo backoff.BackOff) (string, string, error) {
-	logger := a.logger.With(zap.String("url", a.apiURL), zap.String("username", a.username))
+	logger := a.logger.With(servicelog.String("url", a.apiURL), servicelog.String("username", a.username))
 	var (
 		authID    string
 		authToken string
@@ -101,17 +101,17 @@ func (a auth) httpAuth(ctx context.Context, bo backoff.BackOff) (string, string,
 	encoder := json.NewEncoder(buffer)
 	err := encoder.Encode(credentials)
 	if err != nil {
-		logger.Error("failed to encode credentials", zap.Error(err))
+		logger.Error("failed to encode credentials", servicelog.Error(err))
 		return "", "", err
 	}
 	body := buffer.Bytes()
 	// Parse the auth URL
 	authURL, err := validateURL(a.apiURL + "/api/login")
 	if err != nil {
-		logger.Error("failed to parse auth url", zap.String("url", a.apiURL), zap.Error(err))
+		logger.Error("failed to parse auth url", servicelog.String("url", a.apiURL), servicelog.Error(err))
 		return "", "", err
 	}
-	logger = logger.With(zap.String("authUrl", authURL))
+	logger = logger.With(servicelog.String("authUrl", authURL))
 	// Keep retrying until we succeed
 	authErr = backoff.Retry(func() (returnErr error) {
 		defer func() {
@@ -119,7 +119,7 @@ func (a auth) httpAuth(ctx context.Context, bo backoff.BackOff) (string, string,
 		}()
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL, bytes.NewReader(body))
 		if err != nil {
-			logger.Error("failed to create request", zap.Error(err))
+			logger.Error("failed to create request", servicelog.Error(err))
 			return &backoff.PermanentError{Err: err}
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -128,26 +128,26 @@ func (a auth) httpAuth(ctx context.Context, bo backoff.BackOff) (string, string,
 			defer exhaust(resp.Body)
 		}
 		if err != nil {
-			logger.Error("failed to authenticate", zap.Error(err))
+			logger.Error("failed to authenticate", servicelog.Error(err))
 			return err
 		}
 		if resp.Body == nil {
-			logger.Error("empty auth response", zap.Error(err))
+			logger.Error("empty auth response", servicelog.Error(err))
 			return EmptyAuthResponseError
 		}
 		if resp.StatusCode != http.StatusOK {
 			err = bodyToError(resp)
-			logger.Error("authentication rejected", zap.Error(err))
+			logger.Error("authentication rejected", servicelog.Error(err))
 			return err
 		}
 		var reply httpAuthReply
 		decoder := json.NewDecoder(resp.Body)
 		if err := decoder.Decode(&reply); err != nil {
-			logger.Error("failed to decode auth reply", zap.Error(err))
+			logger.Error("failed to decode auth reply", servicelog.Error(err))
 			return err
 		}
 		if reply.Token == "" {
-			logger.Error("empty token response", zap.Error(err))
+			logger.Error("empty token response", servicelog.Error(err))
 			return EmptyTokenResponseError
 		}
 		authID = reply.ID
@@ -173,7 +173,7 @@ type AuthRequest struct {
 
 // Attend to authentication queries in the channel
 func (a auth) WatchAuth(ctx context.Context, queries <-chan AuthRequest) {
-	logger := a.logger.With(zap.String("apiUrl", a.apiURL), zap.String("username", a.username))
+	logger := a.logger.With(servicelog.String("apiUrl", a.apiURL), servicelog.String("username", a.username))
 	bo := eternalBackoff()
 	lastReply := AuthReply{}
 	for {
@@ -195,7 +195,7 @@ func (a auth) WatchAuth(ctx context.Context, queries <-chan AuthRequest) {
 					Err:    err,
 				}
 				if err != nil {
-					logger.Error("failed to authenticate", zap.Error(err))
+					logger.Error("failed to authenticate", servicelog.Error(err))
 					lastReply.Token = ""
 				}
 			}

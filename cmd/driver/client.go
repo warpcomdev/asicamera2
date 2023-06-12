@@ -5,12 +5,12 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/warpcomdev/asicamera2/internal/driver/camera/backend"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/backend"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 type debugClient struct {
-	logger *zap.Logger
+	logger servicelog.Logger
 	client backend.Client
 }
 
@@ -44,7 +44,7 @@ func (r *peekReader) Close() error {
 
 // Do implements Client
 func (c debugClient) Do(req *http.Request) (*http.Response, error) {
-	logger := c.logger.With(zap.String("method", req.Method), zap.String("url", req.URL.String()), zap.Any("headers", req.Header))
+	logger := c.logger.With(servicelog.String("method", req.Method), servicelog.String("url", req.URL.String()), servicelog.Any("headers", req.Header))
 	/*var pr *peekReader
 	if req.Body != nil {
 		pr = &peekReader{
@@ -54,7 +54,7 @@ func (c debugClient) Do(req *http.Request) (*http.Response, error) {
 	}*/
 	resp, err := c.client.Do(req)
 	/*if pr != nil {
-		logger = logger.With(zap.ByteString("body", pr.buffer.Bytes()))
+		logger = logger.With(servicelog.ByteString("body", pr.buffer.Bytes()))
 	}*/
 	logger.Debug("HTTP request")
 	return resp, err

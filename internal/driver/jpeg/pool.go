@@ -8,7 +8,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 // --------------------------------
@@ -92,7 +92,7 @@ type srcFrame struct {
 }
 
 // Stream a source through a SrcFrame channel
-func (pool *Pool) stream(ctx context.Context, logger *zap.Logger, source Source) chan srcFrame {
+func (pool *Pool) stream(ctx context.Context, logger servicelog.Logger, source Source) chan srcFrame {
 	frames := make(chan srcFrame, pool.poolSize)
 	go func() {
 		defer close(frames)
@@ -119,7 +119,7 @@ func (pool *Pool) stream(ctx context.Context, logger *zap.Logger, source Source)
 			}
 			newFrame.SrcFrame, err = source.Next(ctx, srcImage)
 			if err != nil {
-				logger.Error("Failed to get next frame", zap.Error(err))
+				logger.Error("Failed to get next frame", servicelog.Error(err))
 				pool.freeList <- srcImage // return the image to the free list
 				return
 			}
@@ -323,7 +323,7 @@ type Farm struct {
 }
 
 // New compression pool
-func NewFarm(logger *zap.Logger, farmSize, taskSize int) *Farm {
+func NewFarm(logger servicelog.Logger, farmSize, taskSize int) *Farm {
 	farm := &Farm{
 		tasks: make(chan farmTask, taskSize),
 	}
@@ -356,7 +356,7 @@ func (farm *Farm) push(task farmTask) {
 }
 
 // run a compression task
-func (farm *Farm) run(logger *zap.Logger, compressor Compressor, task farmTask) Compressor {
+func (farm *Farm) run(logger servicelog.Logger, compressor Compressor, task farmTask) Compressor {
 	// Notify the task and release resources at the end
 	defer func() {
 		task.freeList <- task.rawFrame.Buffer()
@@ -395,7 +395,7 @@ func (farm *Farm) run(logger *zap.Logger, compressor Compressor, task farmTask) 
 	frame.features, err = task.rawFrame.Compress(compressor, &frame.image)
 	if err != nil {
 		// Release the compressor, just in case
-		logger.Error("Compression failed", zap.Error(err))
+		logger.Error("Compression failed", servicelog.Error(err))
 		compressor.Free()
 		compressor = NewCompressor()
 	} else {
@@ -451,7 +451,7 @@ type Session struct {
 // session starts a streaming session from the given Source.
 // The source MUST BE compatible with the RawFeatures with which the
 // pipeline was created.
-func (pipeline *Pipeline) session(ctx context.Context, logger *zap.Logger, source Source) *Session {
+func (pipeline *Pipeline) session(ctx context.Context, logger servicelog.Logger, source Source) *Session {
 	session := &Session{
 		currentFrame: 1, // 0 is reserved for closed stream
 		jpegPool:     pipeline.jpegPool,

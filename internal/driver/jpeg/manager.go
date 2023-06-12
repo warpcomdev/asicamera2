@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"go.uber.org/zap"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 type errString string
@@ -22,7 +22,7 @@ var ErrManagerCancelled errString = "manager has been cancelled"
 // before `Start` or after `Stop`.
 type ResumableSource interface {
 	Source
-	Start(*zap.Logger) error
+	Start(servicelog.Logger) error
 	Stop()
 }
 
@@ -53,7 +53,7 @@ func (pipeline *Pipeline) Manage(source ResumableSource) *SessionManager {
 }
 
 // Acquire a Session for the source, making sure it is Started
-func (m *SessionManager) Acquire(logger *zap.Logger) (*Session, error) {
+func (m *SessionManager) Acquire(logger servicelog.Logger) (*Session, error) {
 	m.cond.L.Lock()
 	defer m.cond.L.Unlock()
 	if m.cancelled {

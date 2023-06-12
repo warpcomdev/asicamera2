@@ -9,7 +9,7 @@ type fakeSessionManager struct {
 	Manager *jpeg.SessionManager
 }
 
-func (m fakeSessionManager) Acquire(logger *zap.Logger) (mjpeg.Session, error) {
+func (m fakeSessionManager) Acquire(logger servicelog.Logger) (mjpeg.Session, error) {
 	return m.Manager.Acquire(logger)
 }
 
@@ -20,7 +20,7 @@ func (m fakeSessionManager) Done() {
 func test() {
 	fmt.Println("Entering program")
 
-	logger, err := zap.NewProduction()
+	logger, err := servicelog.NewProduction()
 	if err != nil {
 		log.Fatalf("can't initialize zap logger: %v", err)
 	}
