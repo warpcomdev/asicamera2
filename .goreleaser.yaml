@@ -24,6 +24,10 @@ archives:
     format_overrides:
     - goos: windows
       format: zip
+    files:
+    - README.md
+    - ASICamera2.dll
+    - example.config.tomcat
 
 checksum:
   name_template: 'checksums.txt'
@@ -37,13 +41,6 @@ changelog:
     exclude:
       - '^docs:'
       - '^test:'
-
-files:
-  - globs:
-      - ASICamera2.dll
-      - example.config.toml
-    main: .
-    target: .
 
 # The lines beneath this are called `modelines`. See `:help modeline`
 # Feel free to remove those if you don't want/use them.
