@@ -47,8 +47,10 @@ func abort(funcname string, err error) {
 }
 
 type fakeSessionManager struct {
-	Pipeline *jpeg.Pipeline
-	Source   *fakesource.Source
+	Pool   *jpeg.Pool
+	Farm   *jpeg.Farm
+	Buffer *jpeg.Buffer
+	Source *fakesource.Source
 }
 
 type fakeSession struct {
@@ -56,14 +58,14 @@ type fakeSession struct {
 	cancelFunc func()
 }
 
-func (f fakeSession) Next(frameNumber uint64) (*jpeg.JpegFrame, uint64, jpeg.FrameStatus) {
+func (f fakeSession) Next(frameNumber uint64) (*jpeg.Frame, uint64, jpeg.FrameStatus) {
 	return f.session.Next(frameNumber)
 }
 
 func (m fakeSessionManager) Acquire() mjpeg.Session {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	return fakeSession{
-		session:    m.Pipeline.Session(ctx, m.Source, m.Source.Features),
+		session:    m.Buffer.Session(ctx, m.Source, m.Source.Features, m.Pool, m.Farm),
 		cancelFunc: cancelFunc,
 	}
 }
@@ -102,8 +104,10 @@ func main() {
 
 	frames_per_second := 15
 	fsm := fakeSessionManager{
-		Pipeline: jpeg.New(frames_per_second, 3*frames_per_second, 8, fs.Features, jpeg.TJSAMP_420, 95, 0),
-		Source:   fs,
+		Pool:   jpeg.NewPool(frames_per_second, fs.Features),
+		Farm:   jpeg.NewFarm(8, frames_per_second, jpeg.TJSAMP_420, 95, 0),
+		Buffer: jpeg.NewBuffer(3*frames_per_second, fs.Features),
+		Source: fs,
 	}
 	go fsm.Source.Run(context.Background(), frames_per_second)
 
@@ -111,8 +115,6 @@ func main() {
 	http.Handle("/metrics", promhttp.Handler())
 
 	fmt.Println("Listening on port :8080")
-	//Cannot set absolute timeout because mjpeg hander is streaming
-	//Must implement Hijack to fix
 	srv := &http.Server{
 		Addr:           ":8080",
 		Handler:        http.DefaultServeMux,
@@ -121,5 +123,4 @@ func main() {
 		MaxHeaderBytes: 1 << 20,
 	}
 	log.Fatal(srv.ListenAndServe())
-	//log.Fatal(http.ListenAndServe("0.0.0.0:8080", nil))
 }

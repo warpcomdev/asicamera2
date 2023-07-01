@@ -123,6 +123,7 @@ func NewCompressor() Compressor {
 	}
 }
 
+// Free compressor resources
 func (c Compressor) Free() {
 	C.tjDestroy(c.handle)
 }
@@ -134,6 +135,7 @@ func NewDecompressor() Decompressor {
 	}
 }
 
+// Free decompressor resources
 func (d Decompressor) Free() {
 	C.tjDestroy(d.handle)
 }
@@ -218,6 +220,7 @@ func (c *Compressor) Compress(input *Image, rawFeat RawFeatures, output *Image, 
 	}, nil
 }
 
+// WriteFile saves the compressed image to the given path
 func (img *Image) WriteFile(path string) error {
 	infile, err := os.Create(path)
 	if err != nil {

@@ -14,7 +14,7 @@ import (
 )
 
 type Session interface {
-	Next(frameNumber uint64) (*jpeg.JpegFrame, uint64, jpeg.FrameStatus)
+	Next(frameNumber uint64) (*jpeg.Frame, uint64, jpeg.FrameStatus)
 }
 
 type SessionManager interface {
@@ -78,7 +78,7 @@ func Handler(mgr SessionManager) http.Handler {
 		rw.Flush()
 
 		// Build a channel for pushing frames
-		frames := make(chan *jpeg.JpegFrame)
+		frames := make(chan *jpeg.Frame)
 		go func() {
 			defer close(frames)
 			var currentFrame uint64 = 1

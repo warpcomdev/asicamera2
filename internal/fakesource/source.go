@@ -9,11 +9,16 @@ import (
 	"github.com/warpcomdev/asicamera2/internal/jpeg"
 )
 
+type numberedImage struct {
+	*jpeg.Image
+	frameNumber uint64
+}
+
 // Source of frames
 type Source struct {
 	RawImage *jpeg.Image
 	Features jpeg.RawFeatures
-	Stream   chan *jpeg.Image
+	Stream   chan numberedImage
 	Offset   int
 }
 
@@ -36,17 +41,18 @@ func New(fsys fs.FS, path string) (*Source, error) {
 	return &Source{
 		RawImage: out,
 		Features: features,
-		Stream:   make(chan *jpeg.Image),
+		Stream:   make(chan numberedImage),
 	}, nil
 }
 
 func (s *Source) Run(ctx context.Context, fps int) {
 	ticker := time.NewTicker(time.Duration(1000/fps) * time.Millisecond)
+	var frameNumber uint64 = 1
 	for {
 		select {
 		case <-ticker.C:
 			select {
-			case s.Stream <- s.RawImage:
+			case s.Stream <- numberedImage{Image: s.RawImage, frameNumber: frameNumber}:
 				buff := s.RawImage.Slice()
 				pitch := s.Features.Pitch()
 				line := make([]byte, pitch)
@@ -57,16 +63,17 @@ func (s *Source) Run(ctx context.Context, fps int) {
 				c += copy(buff[total-pitch:], line)
 			default:
 			}
+			frameNumber += 1
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (s *Source) Next(ctx context.Context, img *jpeg.Image) error {
+func (s *Source) Next(ctx context.Context, img *jpeg.Image) (uint64, error) {
 	select {
 	case <-ctx.Done():
-		return errors.New("Context cancelled")
+		return 0, errors.New("context cancelled")
 	case srcImg := <-s.Stream:
 		if img.Size() < srcImg.Size() {
 			img.Free()
@@ -75,6 +82,6 @@ func (s *Source) Next(ctx context.Context, img *jpeg.Image) error {
 		srcSlice := srcImg.Slice()
 		dstSlice := img.Slice()
 		copy(dstSlice, srcSlice)
+		return srcImg.frameNumber, nil
 	}
-	return nil
 }
