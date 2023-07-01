@@ -3,11 +3,22 @@ package servicelog
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/kardianos/service"
+	"go.uber.org/zap"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
+
+type lumberjackSink struct {
+	*lumberjack.Logger
+}
+
+func (lumberjackSink) Sync() error {
+	return nil
+}
 
 type Attrib func(sb *strings.Builder)
 
@@ -55,10 +66,26 @@ func Duration(name string, value time.Duration) Attrib {
 }
 
 func New(root service.Logger, debug bool) Logger {
-	return &logger{
-		logger: root,
-		debug:  debug,
+	zap.RegisterSink("lumberjack", func(u *url.URL) (zap.Sink, error) {
+		return lumberjackSink{
+			Logger: &lumberjack.Logger{
+				Filename: u.Path,
+			},
+		}, nil
+	})
+
+	var config zap.Config
+	if debug {
+		config = zap.NewDevelopmentConfig()
+	} else {
+		config = zap.NewProductionConfig()
 	}
+	config.OutputPaths = []string{"lumberjack://asicamera2.log"}
+	logger, err := config.Build()
+	if err != nil {
+		panic(err)
+	}
+	return logger
 }
 
 type Logger interface {

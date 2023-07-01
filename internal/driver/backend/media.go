@@ -11,8 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
+// httpMediaRequest implements the Resource interface for media
+// (pictures and fotos)
 type httpMediaRequest struct {
 	ID        string       `json:"id"`
 	Timestamp string       `json:"timestamp"`
@@ -56,6 +60,7 @@ func (hmr httpMediaRequest) PutBody() (io.ReadCloser, error) {
 
 // Media sends a media resource to the server
 func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeType string, path string) error {
+	logger := s.logger.With(servicelog.String("path", path), servicelog.String("mimeType", mimeType))
 	id := fmt.Sprintf("%s_%s", s.cameraID, filepath.Base(path))
 	var mediaType string
 	if strings.HasPrefix(mimeType, "video") {
@@ -65,6 +70,7 @@ func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeTyp
 		mediaType = "picture"
 	}
 	if mediaType == "" {
+		logger.Error("failed to detect media type")
 		return UnknownMediaTypeError
 	}
 	media := httpMediaRequest{
@@ -78,8 +84,11 @@ func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeTyp
 	err := s.sendResource(ctx, authChan, media, sendOptions{
 		maxRetries: 3,
 	})
-	if err == nil {
+	if err != nil {
+		logger.Error("failed to send media metadata")
+	} else {
 		// post file body
+		logger.Debug("sending media contents")
 		file := &httpFileRequest{
 			ID:        id,
 			Path:      path,
@@ -90,6 +99,11 @@ func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeTyp
 			maxRetries:       3,
 			limitConcurrency: true,
 		})
+		if err == nil {
+			logger.Debug("done sending media contents")
+		} else {
+			logger.Error("failed to send media contents", servicelog.Error(err))
+		}
 	}
 	return err
 }

@@ -11,6 +11,8 @@ import (
 	"sync"
 )
 
+// httpFileRequest implements the Resource interface for media content
+// (multipart body with file contents)
 type httpFileRequest struct {
 	Mutex     sync.Mutex `json:"-"` // protects the errors
 	ID        string     `json:"id"`
@@ -51,7 +53,7 @@ func (hfr *httpFileRequest) Close() error {
 	hfr.Mutex.Lock()
 	defer hfr.Mutex.Unlock()
 	err := hfr.CloseError
-	// LEave the struct in a consistent state
+	// Leave the struct in a consistent state
 	hfr.Stop = nil
 	hfr.WG = nil
 	hfr.MultipartWriter = nil
@@ -96,6 +98,8 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 	hfr.CloseError = nil
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
+	// The returnErr in this closure is captured by a defer
+	// inside it, and saved into the struct
 	go func() (returnErr error) {
 		defer wg.Done()
 		// Merge all possible errors into one

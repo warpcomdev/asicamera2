@@ -25,10 +25,15 @@ func validateURL(origURL string) (string, error) {
 
 // Resource that can be Put or Posted
 type resource interface {
+	// URL for POSTing (creating) this resource
 	PostURL(apiURL string) string
+	// Body for POSTing (creating) this resource
 	PostBody() (io.ReadCloser, error)
+	// Content-Type for POSTing (creating) this resource
 	PostType() string
+	// URL for PUTting (updating) this resource
 	PutURL(apiURL string) string
+	// Body for PUTting (updating) this resource
 	PutBody() (io.ReadCloser, error)
 }
 
@@ -69,10 +74,13 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 		// If concurrency of this resource is controller, pick an item from the queue
 		// so only as many as the number of concurrent uploads is in transit
 		if opts.limitConcurrency {
+			logger.Debug("getting concurrency token")
 			<-s.queue
 			defer func() {
 				s.queue <- struct{}{}
+				logger.Debug("concurrency token released")
 			}()
+			logger.Debug("got concurrency token")
 		}
 		var resp *http.Response
 		if !opts.onlyPut {
@@ -106,6 +114,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 				return &backoff.PermanentError{Err: err}
 			}
 			if putURL == "" {
+				logger.Debug("no put url, skipping put")
 				return &backoff.PermanentError{Err: PostFailedError}
 			}
 			putBody, err := resource.PutBody()
@@ -128,6 +137,9 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 				logger.Error("failed to put resource", servicelog.Error(err))
 				return err
 			}
+		}
+		if resp == nil {
+			logger.Error("could not decide to POST or PUT", servicelog.Bool("onlyPost", opts.onlyPost), servicelog.Bool("onlyPut", opts.onlyPut))
 		}
 		if resp != nil && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 			err = bodyToError(resp)

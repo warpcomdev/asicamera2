@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// Alert implements the alert resource
 type Alert struct {
 	ID         string `json:"id"`
 	Timestamp  string `json:"timestamp"`
