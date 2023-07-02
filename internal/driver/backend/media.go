@@ -88,7 +88,7 @@ func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeTyp
 		logger.Error("failed to send media metadata")
 	} else {
 		// post file body
-		logger.Debug("sending media contents")
+		logger.Info("sending media contents")
 		file := &httpFileRequest{
 			ID:        id,
 			Path:      path,
