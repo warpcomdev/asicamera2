@@ -2,7 +2,9 @@ package servicelog
 
 import (
 	"net/url"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kardianos/service"
@@ -52,10 +54,16 @@ func Duration(name string, value time.Duration) Attrib {
 }
 
 func New(root service.Logger, logDir string, debug bool) (Logger, error) {
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return Logger{}, err
+	}
 	zap.RegisterSink("lumberjack", func(u *url.URL) (zap.Sink, error) {
+		logPart := strings.Split(u.String(), "/")
+		logFile := filepath.Join(logDir, logPart[len(logPart)-1])
+		root.Info("logging events from ", u.String(), " to folder ", logDir, ", file ", logFile)
 		return lumberjackSink{
 			Logger: &lumberjack.Logger{
-				Filename:   filepath.Join(logDir, filepath.Base(u.Path)),
+				Filename:   logFile,
 				MaxSize:    8 * 1024 * 1024,
 				MaxBackups: 128,
 			},

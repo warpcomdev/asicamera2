@@ -51,6 +51,7 @@ type sendOptions struct {
 	limitConcurrency bool
 	onlyPut          bool
 	onlyPost         bool
+	skipLogError     bool
 }
 
 func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, resource resource, opts sendOptions) error {
@@ -102,7 +103,9 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 				defer exhaust(resp.Body)
 			}
 			if err != nil {
-				logger.Error("failed to post data", servicelog.Error(err))
+				if !opts.skipLogError {
+					logger.Error("failed to post data", servicelog.Error(err))
+				}
 				return err
 			}
 		}
@@ -134,7 +137,9 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 				defer exhaust(resp.Body)
 			}
 			if err != nil {
-				logger.Error("failed to put resource", servicelog.Error(err))
+				if !opts.skipLogError {
+					logger.Error("failed to put resource", servicelog.Error(err))
+				}
 				return err
 			}
 		}
@@ -143,7 +148,9 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 		}
 		if resp != nil && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 			err = bodyToError(resp)
-			logger.Error("failed to put data", servicelog.Error(err))
+			if !opts.skipLogError {
+				logger.Error("failed to put data", servicelog.Error(err))
+			}
 			return err
 		}
 		return nil

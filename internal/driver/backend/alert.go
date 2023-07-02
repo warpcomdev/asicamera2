@@ -81,5 +81,5 @@ func (s *Server) ClearAlert(ctx context.Context, authChan chan<- AuthRequest, id
 			ResolvedAt: now,
 		},
 	}
-	s.sendResource(ctx, authChan, alert, sendOptions{onlyPut: true, maxRetries: 3})
+	s.sendResource(ctx, authChan, alert, sendOptions{onlyPut: true, maxRetries: 3, skipLogError: true})
 }
