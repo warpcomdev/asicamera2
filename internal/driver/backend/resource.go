@@ -115,6 +115,10 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 		}
 		// If only doing PUT, or POST failed and not only doing POST, try PUT
 		if !opts.onlyPost && (opts.onlyPut || resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusInternalServerError) {
+			if resp != nil {
+				postErr := bodyToError(resp)
+				logger.Debug("POST failed, trying PUT", servicelog.Error(postErr))
+			}
 			putURL, err := validateURL(resource.PutURL(s.auth.apiURL))
 			if err != nil {
 				logger.Error("failed to validate put url", servicelog.Error(err))
