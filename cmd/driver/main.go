@@ -160,7 +160,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	if err := config.Check(); err != nil {
+	if err := config.Check(configPath); err != nil {
 		panic(err)
 	}
 
@@ -186,7 +186,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	logger, err := servicelog.New(rootLogger, filepath.Join(filepath.Dir(configPath), "log"), config.Debug)
+	logger, err := servicelog.New(rootLogger, config.LogFolder, config.Debug)
 	if err != nil {
 		panic(err)
 	}

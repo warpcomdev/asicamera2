@@ -3,6 +3,7 @@ ReadTimeoutSeconds = 5
 WriteTimeoutSeconds = 7
 MaxHeaderBytes = 1048576
 HistoryFolder = "C:/AsiCamera/History"
+LogFolder = "C:/AsiCamera/Logs"
 MonitorForMinutes = 1
 ApiUsername = "superAdmin"
 ApiKey = "superPassword"
