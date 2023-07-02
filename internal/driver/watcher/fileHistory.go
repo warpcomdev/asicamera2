@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"bufio"
+	"errors"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -32,16 +33,18 @@ type FileHistory struct {
 	historyFolder string
 	historyFile   string
 	history       map[string]fileTask
+	expiration    time.Duration
 }
 
 // New creates a new FileHistory object
-func NewHistory(logger servicelog.Logger, historyFolder, historyFile string) *FileHistory {
+func NewHistory(logger servicelog.Logger, historyFolder, historyFile string, expiration time.Duration) *FileHistory {
 	// Create the file history
 	f := &FileHistory{
 		logger:        logger,
 		historyFolder: historyFolder,
 		historyFile:   historyFile,
 		history:       make(map[string]fileTask),
+		expiration:    expiration,
 	}
 	return f
 }
@@ -56,7 +59,45 @@ func (f *FileHistory) LastUpdate() time.Time {
 func (f *FileHistory) Remap() {
 	newMap := make(map[string]fileTask)
 	for _, task := range f.history {
-		newMap[task.Path] = task
+		// Remove files that have been uploaded for long enough
+		keep := true
+		if !task.Uploaded.IsZero() && f.expiration > 0 && time.Since(task.Uploaded) > f.expiration {
+			logger := f.logger.With(servicelog.String("path", task.Path))
+			err := os.Remove(task.Path)
+			if err == nil {
+				logger.Info("removed expired file from history")
+				keep = false
+			} else {
+				// If there was an error, check if it was file not exist
+				// or path is a directory
+				if os.IsNotExist(err) {
+					logger.Info("cleaned missing file from history")
+					keep = false
+				} else {
+					stat, statErr := os.Stat(task.Path)
+					if statErr == nil {
+						if stat.IsDir() {
+							logger.Info("cleaned directory from history")
+							keep = false
+						}
+					} else {
+						if os.IsNotExist(statErr) {
+							logger.Info("cleaned missing directory from history")
+							keep = false
+						} else {
+							logger.Error("could not remove or stat file", servicelog.Error(err))
+							err = errors.Join(err, statErr)
+						}
+					}
+				}
+			}
+			if keep {
+				logger.Error("could not determine how to clean up expired file", servicelog.Error(err))
+			}
+		}
+		if keep {
+			newMap[task.Path] = task
+		}
 	}
 	f.history = newMap
 }

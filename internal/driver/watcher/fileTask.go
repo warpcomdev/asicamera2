@@ -124,7 +124,6 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 			if !ok || triggerNumber >= triggersSent-1 {
 				return
 			}
-			break
 		case <-inactivity.C:
 			// When the inactivity timer expires, trigger an upload
 			logger.Info("inactivity expired, triggering upload", servicelog.String("file", t.Path), servicelog.Duration("monitorFor", monitorFor))
@@ -136,7 +135,6 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 				break
 			default:
 			}
-			break
 		case _, ok := <-events:
 			// If the event channel is closed, the file has been removed
 			// and we are no longer interested in uploading it. Quit.
@@ -152,7 +150,6 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 				<-inactivity.C
 			}
 			inactivity.Reset(monitorFor)
-			break
 		}
 	}
 }

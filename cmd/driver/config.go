@@ -21,6 +21,7 @@ type Config struct {
 	LogFolder           string            `json:"LogFolder" toml:"LogFolder" yaml:"LogFolder"`
 	MimeTypes           map[string]string `json:"VideoTypes" toml:"VideoTypes" yaml:"VideoTypes"`
 	MonitorForMinutes   int               `json:"MonitorForMinutes" toml:"MonitorForMinutes" yaml:"MonitorForMinutes"`
+	ExpireAfterDays     int               `json:"ExpireAfterDays" toml:"ExpireAfterDays" yaml:"ExpireAfterDays"`
 	ApiUsername         string            `json:"ApiUsername" toml:"ApiUsername" yaml:"ApiUsername"`
 	ApiKey              string            `json:"ApiKey" toml:"ApiKey" yaml:"ApiKey"`
 	ApiURL              string            `json:"ApiURL" toml:"ApiURL" yaml:"ApiURL"`
@@ -100,6 +101,9 @@ func (config *Config) Check(configPath string) error {
 	}
 	if config.ApiConcurrency < 1 {
 		config.ApiConcurrency = 3
+	}
+	if config.ExpireAfterDays < 0 {
+		config.ExpireAfterDays = 0
 	}
 	if config.CameraID == "" {
 		return errors.New("cameraID config parameter is required")
