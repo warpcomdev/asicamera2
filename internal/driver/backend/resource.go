@@ -37,6 +37,13 @@ type resource interface {
 	PutBody() (io.ReadCloser, error)
 }
 
+// Resource that can be Put or Posted
+type getResource interface {
+	// URL for POSTing (creating) this resource
+	GetURL(apiURL string) string
+	ReadBody(body io.Reader) error
+}
+
 func eternalBackoff() backoff.BackOff {
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = 1 * time.Second
@@ -51,7 +58,6 @@ type sendOptions struct {
 	limitConcurrency bool
 	onlyPut          bool
 	onlyPost         bool
-	skipLogError     bool
 }
 
 func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, resource resource, opts sendOptions) error {
@@ -103,9 +109,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 				defer exhaust(resp.Body)
 			}
 			if err != nil {
-				if !opts.skipLogError {
-					logger.Error("failed to post data", servicelog.Error(err))
-				}
+				logger.Error("failed to post data", servicelog.Error(err))
 				return err
 			}
 		}
@@ -137,9 +141,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 				defer exhaust(resp.Body)
 			}
 			if err != nil {
-				if !opts.skipLogError {
-					logger.Error("failed to put resource", servicelog.Error(err))
-				}
+				logger.Error("failed to put resource", servicelog.Error(err))
 				return err
 			}
 		}
@@ -148,10 +150,55 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 		}
 		if resp != nil && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 			err = bodyToError(resp)
-			if !opts.skipLogError {
-				logger.Error("failed to put data", servicelog.Error(err))
-			}
+			logger.Error("failed to put data", servicelog.Error(err))
 			return err
+		}
+		return nil
+	}, backoff.WithContext(bo, ctx))
+	bo.Reset()
+	return err
+}
+
+func (s *Server) getResource(ctx context.Context, authChan chan<- AuthRequest, resource getResource, opts sendOptions) error {
+	logger := s.auth.logger
+	// Build the request for POST
+	getURL, err := validateURL(resource.GetURL(s.auth.apiURL))
+	if err != nil {
+		logger.Error("failed to validate get url", servicelog.Error(err))
+		return err
+	}
+	logger = logger.With(servicelog.String("getURL", getURL))
+	// Build the request for PUT
+	var bo backoff.BackOff = eternalBackoff()
+	if opts.maxRetries > 0 {
+		bo = backoff.WithMaxRetries(bo, uint64(opts.maxRetries))
+	}
+	err = backoff.Retry(func() (returnErr error) {
+		defer func() {
+			returnErr = PermanentIfCancel(ctx, returnErr)
+		}()
+		var resp *http.Response
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, getURL, nil)
+		if err != nil {
+			logger.Error("failed to build request", servicelog.Error(err))
+			return &backoff.PermanentError{Err: err}
+		}
+		resp, err = s.auth.Do(ctx, req, authChan)
+		if resp != nil {
+			defer exhaust(resp.Body)
+		}
+		if err != nil {
+			logger.Error("failed to get data", servicelog.Error(err))
+			return err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode > 204 {
+			err := bodyToError(resp)
+			logger.Error("get request returned error", servicelog.Error(err))
+			return err
+		}
+		if err := resource.ReadBody(resp.Body); err != nil {
+			logger.Error("failed to process request data", servicelog.Error(err))
+			return &backoff.PermanentError{Err: err}
 		}
 		return nil
 	}, backoff.WithContext(bo, ctx))
