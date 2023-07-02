@@ -6,7 +6,26 @@ The service exposes an API to operate and query the camera remotely.
 
 ## Requirements
 
+### Compilation
+
 To compile the source code in windows, you need both [golang](https://go.dev/doc/install), [TDM-GCC](https://jmeubank.github.io/tdm-gcc/), [CMake])(https://cmake.org/download/) and [OpenCV](https://gocv.io/getting-started/windows/) installed, and `C:\TDP-GCC\bin` added to your path.
+
+Once all the requirements are in place, just run:
+
+```
+cd cmd\driver
+go get
+go build
+```
+
+### Release
+
+To release a new version of the software, tag it and then run [goreleaser](https://goreleaser.com):
+
+```bash
+export GITHUB_TOKEN="..."
+goreleaser release
+```
 
 ## Installation
 

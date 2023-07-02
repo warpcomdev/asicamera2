@@ -120,14 +120,13 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 			// If an upload is completed, we must check the sequence number.
 			// if it matches the last request triggered, then we are good to leave.
 			// otherwise, we must wait for another completion
-			logger.Debug("upload completed", servicelog.String("file", t.Path), servicelog.Int("trigger", triggerNumber))
+			logger.Info("upload completed", servicelog.String("file", t.Path), servicelog.Int("trigger", triggerNumber))
 			if !ok || triggerNumber >= triggersSent-1 {
 				return
 			}
-			break
 		case <-inactivity.C:
 			// When the inactivity timer expires, trigger an upload
-			logger.Debug("inactivity expired, triggering upload", servicelog.String("file", t.Path), servicelog.Duration("monitorFor", monitorFor))
+			logger.Info("inactivity expired, triggering upload", servicelog.String("file", t.Path), servicelog.Duration("monitorFor", monitorFor))
 			select {
 			case triggered <- triggersSent:
 				// Update the sequence number so we know which trigger
@@ -136,7 +135,6 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 				break
 			default:
 			}
-			break
 		case _, ok := <-events:
 			// If the event channel is closed, the file has been removed
 			// and we are no longer interested in uploading it. Quit.
@@ -152,7 +150,6 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 				<-inactivity.C
 			}
 			inactivity.Reset(monitorFor)
-			break
 		}
 	}
 }
@@ -177,7 +174,7 @@ func (t fileTask) triggered(ctx context.Context, logger servicelog.Logger, serve
 	modtime := info.ModTime().Round(time.Second)
 	if !modtime.After(t.Uploaded) {
 		// The file has not been modified since the last upload
-		logger.Debug("file not modified")
+		logger.Info("file not modified")
 		upload_dropped.WithLabelValues(folder).Inc()
 		return t.Uploaded
 	}

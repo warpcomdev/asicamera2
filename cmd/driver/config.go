@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,22 +13,24 @@ import (
 )
 
 type Config struct {
-	Port                int               `json:"port" toml:"port" yaml:"port"`
-	ReadTimeoutSeconds  int               `json:"readTimeout" toml:"readTimeout" yaml:"readTimeout"`
-	WriteTimeoutSeconds int               `json:"writeTimeout" toml:"writeTimeout" yaml:"writeTimeout"`
-	MaxHeaderBytes      int               `json:"maxHeaderBytes" toml:"maxHeaderBytes" yaml:"maxHeaderBytes"`
-	HistoryFolder       string            `json:"historyFolder" toml:"historyFolder" yaml:"historyFolder"`
-	MimeTypes           map[string]string `json:"videoTypes" toml:"videoTypes" yaml:"videoTypes"`
-	MonitorForMinutes   int               `json:"monitorForMinutes" toml:"monitorForMinutes" yaml:"monitorForMinutes"`
-	ApiUsername         string            `json:"apiUsername" toml:"apiUsername" yaml:"apiUsername"`
-	ApiKey              string            `json:"apiKey" toml:"apiKey" yaml:"apiKey"`
-	ApiURL              string            `json:"apiURL" toml:"apiURL" yaml:"apiURL"`
-	ApiSkipVerify       bool              `json:"apiSkipVerify" toml:"apiSkipVerify" yaml:"apiSkipVerify"`
-	ApiRefreshMinutes   int               `json:"apiRefreshMinutes" toml:"apiRefreshMinutes" yaml:"apiRefreshMinutes"`
-	ApiTimeoutSeconds   int               `json:"apiTimeoutSeconds" toml:"apiTimeoutSeconds" yaml:"apiTimeoutSeconds"`
-	ApiConcurrency      int               `json:"apiConcurrency" toml:"apiConcurrency" yaml:"apiConcurrency"`
-	CameraID            string            `json:"cameraID" toml:"cameraID" yaml:"cameraID"`
-	Debug               bool              `json:"debug" toml:"debug" yaml:"debug"`
+	Port                int               `json:"Port" toml:"Port" yaml:"Port"`
+	ReadTimeoutSeconds  int               `json:"ReadTimeout" toml:"ReadTimeout" yaml:"ReadTimeout"`
+	WriteTimeoutSeconds int               `json:"WriteTimeout" toml:"WriteTimeout" yaml:"WriteTimeout"`
+	MaxHeaderBytes      int               `json:"MaxHeaderBytes" toml:"MaxHeaderBytes" yaml:"MaxHeaderBytes"`
+	HistoryFolder       string            `json:"HistoryFolder" toml:"HistoryFolder" yaml:"HistoryFolder"`
+	LogFolder           string            `json:"LogFolder" toml:"LogFolder" yaml:"LogFolder"`
+	MimeTypes           map[string]string `json:"VideoTypes" toml:"VideoTypes" yaml:"VideoTypes"`
+	MonitorForMinutes   int               `json:"MonitorForMinutes" toml:"MonitorForMinutes" yaml:"MonitorForMinutes"`
+	ExpireAfterDays     int               `json:"ExpireAfterDays" toml:"ExpireAfterDays" yaml:"ExpireAfterDays"`
+	ApiUsername         string            `json:"ApiUsername" toml:"ApiUsername" yaml:"ApiUsername"`
+	ApiKey              string            `json:"ApiKey" toml:"ApiKey" yaml:"ApiKey"`
+	ApiURL              string            `json:"ApiURL" toml:"ApiURL" yaml:"ApiURL"`
+	ApiSkipVerify       bool              `json:"ApiSkipVerify" toml:"ApiSkipVerify" yaml:"ApiSkipVerify"`
+	ApiRefreshMinutes   int               `json:"ApiRefreshMinutes" toml:"ApiRefreshMinutes" yaml:"ApiRefreshMinutes"`
+	ApiTimeoutSeconds   int               `json:"ApiTimeoutSeconds" toml:"ApiTimeoutSeconds" yaml:"ApiTimeoutSeconds"`
+	ApiConcurrency      int               `json:"ApiConcurrency" toml:"ApiConcurrency" yaml:"ApiConcurrency"`
+	CameraID            string            `json:"CameraID" toml:"CameraID" yaml:"CameraID"`
+	Debug               bool              `json:"Debug" toml:"Debug" yaml:"Debug"`
 }
 
 func normalizeExtension(ext string) string {
@@ -38,7 +41,7 @@ func normalizeExtension(ext string) string {
 	return ext
 }
 
-func (config *Config) Check() error {
+func (config *Config) Check(configPath string) error {
 	if config.Port < 1024 || config.Port > 65535 {
 		config.Port = 8080
 	}
@@ -51,8 +54,12 @@ func (config *Config) Check() error {
 	if config.MaxHeaderBytes < 4096 {
 		config.MaxHeaderBytes = 1 << 20
 	}
+	configDir := filepath.Dir(configPath)
 	if config.HistoryFolder == "" {
-		return errors.New("historyFolder config parameter is required")
+		config.HistoryFolder = filepath.Join(configDir, "history")
+	}
+	if config.LogFolder == "" {
+		config.LogFolder = filepath.Join(configDir, "logs")
 	}
 	if config.MimeTypes == nil || len(config.MimeTypes) == 0 {
 		config.MimeTypes = map[string]string{
@@ -94,6 +101,9 @@ func (config *Config) Check() error {
 	}
 	if config.ApiConcurrency < 1 {
 		config.ApiConcurrency = 3
+	}
+	if config.ExpireAfterDays < 0 {
+		config.ExpireAfterDays = 0
 	}
 	if config.CameraID == "" {
 		return errors.New("cameraID config parameter is required")

@@ -114,7 +114,14 @@ func watchMedia(ctx context.Context, logger servicelog.Logger, config Config, se
 		}
 		logger = logger.With(servicelog.String("folder", folderUpdate))
 		// Keep trying to watch until the folder name changes
-		watch := watcher.New(logger, config.HistoryFolder, proxy, folderUpdate, config.FileTypes(), time.Duration(config.MonitorForMinutes)*time.Minute)
+		watch := watcher.New(logger,
+			config.HistoryFolder,
+			proxy,
+			folderUpdate,
+			config.FileTypes(),
+			time.Duration(config.MonitorForMinutes)*time.Minute,
+			time.Duration(config.ExpireAfterDays)*time.Hour*24,
+		)
 		watcherCtx, watcherCancel := context.WithCancel(ctx)
 		cancelPrevWatcher = watcherCancel
 		wg.Add(1)

@@ -44,7 +44,13 @@ func (r *peekReader) Close() error {
 
 // Do implements Client
 func (c debugClient) Do(req *http.Request) (*http.Response, error) {
-	logger := c.logger.With(servicelog.String("method", req.Method), servicelog.String("url", req.URL.String()), servicelog.Any("headers", req.Header))
+	headerWithoutToken := make(http.Header)
+	for k, v := range req.Header {
+		if k != "Authorization" {
+			headerWithoutToken[k] = v
+		}
+	}
+	logger := c.logger.With(servicelog.String("method", req.Method), servicelog.String("url", req.URL.String()), servicelog.Any("headers", headerWithoutToken))
 	/*var pr *peekReader
 	if req.Body != nil {
 		pr = &peekReader{

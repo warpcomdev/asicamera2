@@ -28,7 +28,7 @@ type FileWatch struct {
 }
 
 // New creates a new FileWatch object
-func New(logger servicelog.Logger, historyFolder string, server Server, folder string, fileTypes map[string]struct{}, monitorFor time.Duration) *FileWatch {
+func New(logger servicelog.Logger, historyFolder string, server Server, folder string, fileTypes map[string]struct{}, monitorFor time.Duration, expiration time.Duration) *FileWatch {
 	// Generate unique history file name from folder name
 	hash := fnv.New64a()
 	hash.Write([]byte(folder))
@@ -37,7 +37,7 @@ func New(logger servicelog.Logger, historyFolder string, server Server, folder s
 	historyFile := filepath.Join(historyFolder, filename)
 	// Create the file history
 	f := &FileWatch{
-		FileHistory: NewHistory(logger, historyFolder, historyFile),
+		FileHistory: NewHistory(logger, historyFolder, historyFile, expiration),
 		logger:      logger,
 		server:      server,
 		folder:      folder,
@@ -163,7 +163,6 @@ func (f *FileWatch) Watch(ctx context.Context) error {
 			case <-timer.C:
 				f.scan(failContext, absPath, syntheticEvents)
 				timer.Reset(2 * time.Hour)
-				break
 			case <-failContext.Done():
 				return
 			}
@@ -207,13 +206,11 @@ func (f *FileWatch) merge(ctx context.Context, input1, input2 chan fsnotify.Even
 				return
 			}
 			forward(event)
-			break
 		case event, ok := <-input2:
 			if !ok {
 				return
 			}
 			forward(event)
-			break
 		}
 	}
 }
@@ -237,7 +234,6 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 			// removed after a file is erased
 			f.logger.Debug("remapping file history")
 			f.FileHistory.Remap()
-			break
 		case event, ok := <-events:
 			if !ok {
 				f.logger.Debug("stopping folder watcher", servicelog.String("folder", absPath))
@@ -268,7 +264,6 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 					task.Events <- event
 				}
 			}
-			break
 		case task := <-tasks:
 			// Get the original task object, in case we need
 			// to close the events channel. We cannot close it
@@ -277,7 +272,6 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 			// in the loop.
 			f.FileHistory.CompleteTask(task)
 			f.FileHistory.Save()
-			break
 		}
 	}
 }
@@ -303,7 +297,6 @@ func (f *FileWatch) scan(ctx context.Context, absPath string, events chan fsnoti
 		case <-ctx.Done():
 			return context.Canceled
 		case events <- event:
-			break
 		}
 	}
 	return nil

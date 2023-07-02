@@ -19,6 +19,7 @@ type httpFolderResponse struct {
 	LocalPath string `json:"local_path"`
 }
 
+// bodyToError reads a response budy and wraps it inside an error
 func bodyToError(resp *http.Response) error {
 	var errMessage bytes.Buffer
 	errMessage.WriteString("HTTP Status ")
@@ -87,7 +88,8 @@ func (s *Server) httpFolder(ctx context.Context, bo backoff.BackOff, authChan ch
 	return folder, err
 }
 
-// WatchFolder watches the folder for changes and notifies them in the folderChan
+// WatchFolder watches the folder configured for this camera in the server,
+// periodically, and notifies changes in the folderChan
 func (s *Server) WatchFolder(ctx context.Context, authChan chan<- AuthRequest, folderChan chan<- string, interval time.Duration) {
 	bo := eternalBackoff()
 	logger := s.auth.logger

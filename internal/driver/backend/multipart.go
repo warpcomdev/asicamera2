@@ -9,8 +9,80 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+var MediaTransferCount = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "media_transferred_count",
+		Help: "Number of Media (picture and video) files transferred",
+	},
+	[]string{"mimetype"},
+)
+
+var MediaTransferError = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "media_transferred_errors",
+		Help: "Number of Media (picture and video) files failed to transfer",
+	},
+	[]string{"mimetype"},
+)
+
+var MediaTransferBytes = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "media_transferred_bytes",
+		Help: "Media (picture and video) bytes transferred",
+	},
+	[]string{"mimetype"},
+)
+
+var MediaTransferBytesError = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "media_transferred_bytes_error",
+		Help: "Media (picture and video) bytes transferred before returning error",
+	},
+	[]string{"mimetype"},
+)
+
+var MediaTransferTime = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Name: "media_transferred_seconds",
+		Help: "Transfer time for files (seconds)",
+		Buckets: []float64{
+			1, 5, 10, 30, 60, 180, 600, 1800,
+		},
+	},
+	[]string{"mimetype"},
+)
+
+var MediaFileSize = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Name: "media_file_size",
+		Help: "media file sizes (bytes)",
+		Buckets: []float64{
+			// These sizes are intended for pictures
+			512 * 1024,
+			1024 * 1024,
+			4 * 1024 * 1024,
+			16 * 1024 * 1024,
+			32 * 1024 * 1024,
+			// Those are intende dfor video
+			128 * 1024 * 1024,
+			512 * 1024 * 1024,
+			1024 * 1024 * 1024,
+			2 * 1024 * 1024 * 1024,
+			4 * 1024 * 1024 * 1024,
+			8 * 1024 * 1024 * 1024,
+		},
+	},
+	[]string{"mimetype"},
+)
+
+// httpFileRequest implements the Resource interface for media content
+// (multipart body with file contents)
 type httpFileRequest struct {
 	Mutex     sync.Mutex `json:"-"` // protects the errors
 	ID        string     `json:"id"`
@@ -51,7 +123,7 @@ func (hfr *httpFileRequest) Close() error {
 	hfr.Mutex.Lock()
 	defer hfr.Mutex.Unlock()
 	err := hfr.CloseError
-	// LEave the struct in a consistent state
+	// Leave the struct in a consistent state
 	hfr.Stop = nil
 	hfr.WG = nil
 	hfr.MultipartWriter = nil
@@ -96,6 +168,8 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 	hfr.CloseError = nil
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
+	// The returnErr in this closure is captured by a defer
+	// inside it, and saved into the struct
 	go func() (returnErr error) {
 		defer wg.Done()
 		// Merge all possible errors into one
@@ -110,6 +184,7 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 			hfr.CloseError = errors.Join(merr, werr)
 		}()
 		// Copied from CreateFormFile
+		start := time.Now()
 		h := make(textproto.MIMEHeader)
 		h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, escapeQuotes("file"), escapeQuotes(hfr.Path)))
 		h.Set("Content-Type", hfr.MimeType)
@@ -126,9 +201,16 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 			reader: in,
 			stop:   stopper,
 		}
-		if written, err := io.Copy(w, controlledIn); err != nil {
+		written, err := io.Copy(w, controlledIn)
+		if err != nil {
+			MediaTransferError.WithLabelValues(hfr.MimeType).Add(1)
+			MediaTransferBytesError.WithLabelValues(hfr.MimeType).Add(float64(written))
 			return fmt.Errorf("error after copying %d bytes: %w", written, err)
 		}
+		MediaTransferTime.WithLabelValues(hfr.MimeType).Observe(float64(time.Since(start) / time.Second))
+		MediaTransferCount.WithLabelValues(hfr.MimeType).Add(1)
+		MediaTransferBytes.WithLabelValues(hfr.MimeType).Add(float64(written))
+		MediaFileSize.WithLabelValues(hfr.MimeType).Observe(float64(written))
 		return nil
 	}()
 	hfr.PipeReader = reader

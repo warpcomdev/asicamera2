@@ -1,15 +1,30 @@
+# ID de la cámara a la que se corresponde este proceso
+CameraID = "camera1"
+# Puerto TCP en el que la aplicación publica las métricas
+# de prometheus
 Port = 8080
+# Timeouts HTTP de lectura y escritura
 ReadTimeoutSeconds = 5
 WriteTimeoutSeconds = 7
+# Tamaño máximo admitido de las cabeceras HTTP
 MaxHeaderBytes = 1048576
+# Directorios para almacenar la historia de subidas, y los logs
 HistoryFolder = "C:/AsiCamera/History"
+LogFolder = "C:/AsiCamera/Logs"
+# Tiempo de espera de inactividad antes de comenzar a subir una captura
 MonitorForMinutes = 1
+# Tiempo de espera antes de borrar de disco una captura ya subida
+ExpireAfterDays = 30
+# Credenciales de conexión a la API
 ApiUsername = "superAdmin"
 ApiKey = "superPassword"
 ApiURL = "https://backend.api.server"
-ApiSkipVerify = true
-ApiRefreshMinutes = 10
 ApiTimeoutSeconds = 10
-ApiConcurrency = 1
-CameraID = "camera1"
+# Número máximo de subidas concurrentes al backend
+ApiConcurrency = 3
+# Ignorar entidad certificadora del certificado HTTPS
+ApiSkipVerify = true
+# Tiempo entre consultas a la API para detección de cambios
+# en la configuración de la cámara
+ApiRefreshMinutes = 10
 Debug = true

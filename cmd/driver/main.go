@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	_ "net/http/pprof"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -85,7 +86,7 @@ func (p *program) Stop(s service.Service) error {
 		cancel := p.Cancel
 		p.Cancel = nil
 		// Close the service in the background
-		wait := make(chan struct{}, 0)
+		wait := make(chan struct{})
 		go func() {
 			defer close(wait)
 			cancel()
@@ -148,18 +149,22 @@ func main() {
 	flag.StringVar(&configPath, "c", "C:\\asicamera\\config.toml", "path to config file")
 	flag.Parse()
 
-	// Load config
-	var config Config
-	_, err := toml.DecodeFile(configPath, &config)
+	configPath, err := filepath.Abs(configPath)
 	if err != nil {
 		panic(err)
 	}
-	if err := config.Check(); err != nil {
+
+	// Load config
+	var config Config
+	_, err = toml.DecodeFile(configPath, &config)
+	if err != nil {
+		panic(err)
+	}
+	if err := config.Check(configPath); err != nil {
 		panic(err)
 	}
 
 	prg := &program{
-		Logger: nil,
 		Config: config,
 	}
 	s, err := service.New(prg, svcConfig)
@@ -181,12 +186,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	logger := servicelog.New(rootLogger, config.Debug)
+	logger, err := servicelog.New(rootLogger, config.LogFolder, config.Debug)
+	if err != nil {
+		panic(err)
+	}
 	prg.Logger = logger
-	// Avoid stack traces below panic level
-	// logger = logger.WithOptions(servicelog.AddStacktrace(servicelog.DPanicLevel))
-	// Set logging level
-	// defer logger.Sync()
+	defer logger.Sync()
 
 	anonimizedConfig := config
 	anonimizedConfig.ApiKey = "********"
