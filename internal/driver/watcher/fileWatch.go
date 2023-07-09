@@ -140,10 +140,12 @@ func (f *FileWatch) Watch(ctx context.Context) error {
 			}
 		}
 		// Otherwise, check if it is an interesting file
-		if _, ok := f.fileTypes[ext]; !ok {
-			f.logger.Debug("Unrecognized extension", servicelog.String("ext", ext), servicelog.String("file", event.Name))
-		} else {
-			events <- event
+		if ext != "" {
+			if _, ok := f.fileTypes[ext]; !ok {
+				f.logger.Debug("Unrecognized extension", servicelog.String("ext", ext), servicelog.String("file", event.Name))
+			} else {
+				events <- event
+			}
 		}
 	}
 	// Merge real and synthetic events into a single channel
@@ -286,6 +288,11 @@ func (f *FileWatch) scan(ctx context.Context, absPath string, events chan fsnoti
 	for _, entry := range entries {
 		if entry.IsDir() {
 			f.logger.Info("scan detected folder", servicelog.String("name", entry.Name()))
+			// Recursively scan folder
+			subPath := filepath.Join(absPath, entry.Name())
+			if err := f.scan(ctx, subPath, events); err != nil {
+				f.logger.Error("failed to scan subpath", servicelog.String("subpath", subPath))
+			}
 		} else {
 			f.logger.Info("scan detected file", servicelog.String("file", entry.Name()))
 		}
