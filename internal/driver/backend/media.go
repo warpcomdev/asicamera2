@@ -94,10 +94,12 @@ func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeTyp
 			Path:      path,
 			MediaType: mediaType,
 			MimeType:  mimeType,
+			Logger:    logger,
 		}
 		err = s.sendResource(ctx, authChan, file, sendOptions{
 			maxRetries:       3,
 			limitConcurrency: true,
+			onlyPost:         true,
 		})
 		if err == nil {
 			logger.Debug("done sending media contents")

@@ -13,6 +13,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/warpcomdev/asicamera2/internal/driver/servicelog"
 )
 
 var MediaTransferCount = promauto.NewCounterVec(
@@ -84,11 +85,12 @@ var MediaFileSize = promauto.NewHistogramVec(
 // httpFileRequest implements the Resource interface for media content
 // (multipart body with file contents)
 type httpFileRequest struct {
-	Mutex     sync.Mutex `json:"-"` // protects the errors
-	ID        string     `json:"id"`
-	Path      string     `json:"path"`
-	MediaType string     `json:"mediaType"`
-	MimeType  string     `json:"mimeType"`
+	Mutex     sync.Mutex        `json:"-"` // protects the errors
+	ID        string            `json:"id"`
+	Path      string            `json:"path"`
+	MediaType string            `json:"mediaType"`
+	MimeType  string            `json:"mimeType"`
+	Logger    servicelog.Logger `json:"-"`
 	// Controls the lifetime of the pipe reader
 	PipeReader      io.ReadCloser     `json:"-"`
 	MultipartWriter *multipart.Writer `json:"-"`
@@ -102,6 +104,7 @@ type httpFileRequest struct {
 // Read implements ReadCloser
 func (hfr *httpFileRequest) Read(b []byte) (int, error) {
 	n, err := hfr.PipeReader.Read(b)
+	hfr.Logger.Debug("read from disk", servicelog.Int("bytes", n))
 	// Propagate errors, if any
 	hfr.Mutex.Lock()
 	defer hfr.Mutex.Unlock()
@@ -116,6 +119,7 @@ func (hfr *httpFileRequest) Read(b []byte) (int, error) {
 // Close implements ReadCloser
 func (hfr *httpFileRequest) Close() error {
 	// Stop the reader if it's running
+	hfr.Logger.Debug("closing multipart transfer")
 	if hfr.Stop != nil {
 		close(hfr.Stop)
 		hfr.WG.Wait()
@@ -183,6 +187,7 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 			werr := writer.Close()
 			hfr.CloseError = errors.Join(merr, werr)
 		}()
+		hfr.Logger.Debug("multipart transfer started")
 		// Copied from CreateFormFile
 		start := time.Now()
 		h := make(textproto.MIMEHeader)
@@ -190,10 +195,12 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 		h.Set("Content-Type", hfr.MimeType)
 		w, err := mwriter.CreatePart(h)
 		if err != nil {
+			hfr.Logger.Error("failed to create multipart writer", servicelog.Error(err))
 			return err
 		}
 		in, err := os.Open(hfr.Path)
 		if err != nil {
+			hfr.Logger.Error("failed to open source file", servicelog.Error(err))
 			return err
 		}
 		defer in.Close()
@@ -203,6 +210,7 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 		}
 		written, err := io.Copy(w, controlledIn)
 		if err != nil {
+			hfr.Logger.Error("failed to copy file contents", servicelog.Error(err))
 			MediaTransferError.WithLabelValues(hfr.MimeType).Add(1)
 			MediaTransferBytesError.WithLabelValues(hfr.MimeType).Add(float64(written))
 			return fmt.Errorf("error after copying %d bytes: %w", written, err)
@@ -211,6 +219,7 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 		MediaTransferCount.WithLabelValues(hfr.MimeType).Add(1)
 		MediaTransferBytes.WithLabelValues(hfr.MimeType).Add(float64(written))
 		MediaFileSize.WithLabelValues(hfr.MimeType).Observe(float64(written))
+		hfr.Logger.Debug("multipart transfer finished")
 		return nil
 	}()
 	hfr.PipeReader = reader
@@ -222,7 +231,9 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 
 // PostType implements resource
 func (hfr *httpFileRequest) PostType() string {
-	return hfr.MultipartWriter.FormDataContentType()
+	postType := hfr.MultipartWriter.FormDataContentType()
+	hfr.Logger.Debug("multipart content type", servicelog.String("content-type", postType))
+	return postType
 }
 
 // PutURL implements resource

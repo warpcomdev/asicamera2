@@ -84,6 +84,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 			logger.Debug("getting concurrency token")
 			<-s.queue
 			defer func() {
+				logger.Debug("going to release concurrency token")
 				s.queue <- struct{}{}
 				logger.Debug("concurrency token released")
 			}()
@@ -115,6 +116,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 		}
 		// If only doing PUT, or POST failed and not only doing POST, try PUT
 		if !opts.onlyPost && (opts.onlyPut || resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusInternalServerError) {
+			// This exhausts the POST body, so the connection is not busy
 			if resp != nil {
 				postErr := bodyToError(resp)
 				logger.Debug("POST failed, trying PUT", servicelog.Error(postErr))
@@ -157,6 +159,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 			logger.Error("failed to put data", servicelog.Error(err))
 			return err
 		}
+		logger.Debug("resource send complete")
 		return nil
 	}, backoff.WithContext(bo, ctx))
 	bo.Reset()
