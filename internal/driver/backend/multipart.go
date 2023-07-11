@@ -85,56 +85,77 @@ var MediaFileSize = promauto.NewHistogramVec(
 // httpFileRequest implements the Resource interface for media content
 // (multipart body with file contents)
 type httpFileRequest struct {
-	Mutex     sync.Mutex        `json:"-"` // protects the errors
+	mutex     sync.Mutex        `json:"-"` // protects readError
 	ID        string            `json:"id"`
 	Path      string            `json:"path"`
 	MediaType string            `json:"mediaType"`
 	MimeType  string            `json:"mimeType"`
 	Logger    servicelog.Logger `json:"-"`
 	// Controls the lifetime of the pipe reader
-	PipeReader      io.ReadCloser     `json:"-"`
-	MultipartWriter *multipart.Writer `json:"-"`
-	Stop            chan struct{}     `json:"-"`
-	WG              *sync.WaitGroup   `json:"-"`
+	pipeReader      io.ReadCloser     `json:"-"`
+	multipartWriter *multipart.Writer `json:"-"`
+	stop            chan struct{}     `json:"-"`
+	wg              *sync.WaitGroup   `json:"-"`
 	// Reports errors while reading
-	ReadError  error `json:"-"`
-	CloseError error `json:"-"`
+	readError  error `json:"-"`
+	closeError error `json:"-"`
 }
 
 // Read implements ReadCloser
 func (hfr *httpFileRequest) Read(b []byte) (int, error) {
-	n, err := hfr.PipeReader.Read(b)
+	// pipeReader is synchronous, so there is no need to protect
+	// the readError variable with a mutex
+	n, err := hfr.pipeReader.Read(b)
 	hfr.Logger.Debug("read from disk", servicelog.Int("bytes", n))
 	// Propagate errors, if any
-	hfr.Mutex.Lock()
-	defer hfr.Mutex.Unlock()
+	hfr.mutex.Lock()
+	defer hfr.mutex.Unlock()
 	// Beware, we cannot unconditionally use errors.Join,
 	// because we want to preserve io.EOF transparently
-	if hfr.ReadError != nil {
-		return n, errors.Join(err, hfr.ReadError)
+	if hfr.readError != nil {
+		if err == nil || errors.Is(err, io.EOF) {
+			return n, hfr.readError
+		} else {
+			return n, errors.Join(err, hfr.readError)
+		}
 	}
 	return n, err
 }
 
-// Close implements ReadCloser
+// Close implements ReadCloser.
+// Close is NOT SAFE to be called from different goroutines.
+// It is however safe to call it multiple times, but always
+// from the same goroutine.
 func (hfr *httpFileRequest) Close() error {
 	// Stop the reader if it's running
 	hfr.Logger.Debug("closing multipart transfer")
-	if hfr.Stop != nil {
-		close(hfr.Stop)
-		hfr.WG.Wait()
+	// Make local copy  of everything we need to cleanup
+	stop := hfr.stop
+	wg := hfr.wg
+	pipeReader := hfr.pipeReader
+	// close file reader, so the reading thread ends
+	if stop != nil {
+		close(stop)
 	}
-	hfr.Mutex.Lock()
-	defer hfr.Mutex.Unlock()
-	err := hfr.CloseError
+	// io.Pipe is **synchronous**, so to make sure we don't leak
+	// goroutines, we need to exhaust the reader so the goroutine ends.
+	// We already called close(hfr.stop), so pipe should break fast.
+	if pipeReader != nil {
+		go func() {
+			exhaust(pipeReader)
+			pipeReader.Close()
+		}()
+	}
+	if wg != nil {
+		wg.Wait()
+	}
 	// Leave the struct in a consistent state
-	hfr.Stop = nil
-	hfr.WG = nil
-	hfr.MultipartWriter = nil
-	hfr.PipeReader = nil
-	hfr.ReadError = nil
-	hfr.CloseError = nil
-	return err
+	hfr.stop = nil
+	hfr.wg = nil
+	hfr.multipartWriter = nil
+	hfr.pipeReader = nil
+	// Errors are cleaned on calling PostBody
+	return hfr.closeError
 }
 
 // PostURL implements resource
@@ -168,34 +189,50 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 	reader, writer := io.Pipe()
 	mwriter := multipart.NewWriter(writer)
 	stopper := make(chan struct{})
-	hfr.ReadError = nil
-	hfr.CloseError = nil
+	hfr.readError = nil
+	hfr.closeError = nil
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	// The returnErr in this closure is captured by a defer
 	// inside it, and saved into the struct
 	go func() (returnErr error) {
 		defer wg.Done()
+		// collect metrics after everything is closed
+		var (
+			start   time.Time = time.Now()
+			written int64
+		)
+		defer func() {
+			if returnErr != nil && !errors.Is(returnErr, io.EOF) {
+				hfr.Logger.Error("failed to copy file contents", servicelog.Error(returnErr))
+				MediaTransferError.WithLabelValues(hfr.MimeType).Add(1)
+				MediaTransferBytesError.WithLabelValues(hfr.MimeType).Add(float64(written))
+				return
+			}
+			MediaTransferTime.WithLabelValues(hfr.MimeType).Observe(float64(time.Since(start) / time.Second))
+			MediaTransferCount.WithLabelValues(hfr.MimeType).Add(1)
+			MediaTransferBytes.WithLabelValues(hfr.MimeType).Add(float64(written))
+			MediaFileSize.WithLabelValues(hfr.MimeType).Observe(float64(written))
+		}()
 		// Merge all possible errors into one
 		defer func() {
-			hfr.Mutex.Lock()
-			defer hfr.Mutex.Unlock()
 			if returnErr != nil && !errors.Is(returnErr, io.EOF) {
-				hfr.ReadError = returnErr
+				hfr.mutex.Lock()
+				hfr.readError = returnErr
+				hfr.mutex.Unlock()
 			}
 			merr := mwriter.Close()
 			werr := writer.Close()
-			hfr.CloseError = errors.Join(merr, werr)
+			hfr.closeError = errors.Join(merr, werr)
 		}()
-		hfr.Logger.Debug("multipart transfer started")
 		// Copied from CreateFormFile
-		start := time.Now()
+		hfr.Logger.Debug("multipart transfer started")
 		h := make(textproto.MIMEHeader)
 		h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, escapeQuotes("file"), escapeQuotes(hfr.Path)))
 		h.Set("Content-Type", hfr.MimeType)
 		w, err := mwriter.CreatePart(h)
 		if err != nil {
-			hfr.Logger.Error("failed to create multipart writer", servicelog.Error(err))
+			hfr.Logger.Error("failed to create multipart block", servicelog.Error(err))
 			return err
 		}
 		in, err := os.Open(hfr.Path)
@@ -208,30 +245,23 @@ func (hfr *httpFileRequest) PostBody() (io.ReadCloser, error) {
 			reader: in,
 			stop:   stopper,
 		}
-		written, err := io.Copy(w, controlledIn)
+		written, err = io.Copy(w, controlledIn)
 		if err != nil {
-			hfr.Logger.Error("failed to copy file contents", servicelog.Error(err))
-			MediaTransferError.WithLabelValues(hfr.MimeType).Add(1)
-			MediaTransferBytesError.WithLabelValues(hfr.MimeType).Add(float64(written))
 			return fmt.Errorf("error after copying %d bytes: %w", written, err)
 		}
-		MediaTransferTime.WithLabelValues(hfr.MimeType).Observe(float64(time.Since(start) / time.Second))
-		MediaTransferCount.WithLabelValues(hfr.MimeType).Add(1)
-		MediaTransferBytes.WithLabelValues(hfr.MimeType).Add(float64(written))
-		MediaFileSize.WithLabelValues(hfr.MimeType).Observe(float64(written))
 		hfr.Logger.Debug("multipart transfer finished")
 		return nil
 	}()
-	hfr.PipeReader = reader
-	hfr.MultipartWriter = mwriter
-	hfr.Stop = stopper
-	hfr.WG = wg
+	hfr.pipeReader = reader
+	hfr.multipartWriter = mwriter
+	hfr.stop = stopper
+	hfr.wg = wg
 	return hfr, nil
 }
 
 // PostType implements resource
 func (hfr *httpFileRequest) PostType() string {
-	postType := hfr.MultipartWriter.FormDataContentType()
+	postType := hfr.multipartWriter.FormDataContentType()
 	hfr.Logger.Debug("multipart content type", servicelog.String("content-type", postType))
 	return postType
 }
