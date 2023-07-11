@@ -73,6 +73,15 @@ func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeTyp
 		logger.Error("failed to detect media type")
 		return UnknownMediaTypeError
 	}
+	// Limit concurrent uploads to the serverm to preserve BW
+	logger.Debug("getting concurrency token")
+	<-s.queue
+	defer func() {
+		logger.Debug("going to release concurrency token")
+		s.queue <- struct{}{}
+		logger.Debug("concurrency token released")
+	}()
+	logger.Debug("got concurrency token")
 	media := httpMediaRequest{
 		ID:        id,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -89,17 +98,16 @@ func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeTyp
 	} else {
 		// post file body
 		logger.Info("sending media contents")
-		file := &httpFileRequest{
+		fileReq := &httpFileRequest{
 			ID:        id,
 			Path:      path,
 			MediaType: mediaType,
 			MimeType:  mimeType,
 			Logger:    logger,
 		}
-		err = s.sendResource(ctx, authChan, file, sendOptions{
-			maxRetries:       3,
-			limitConcurrency: true,
-			onlyPost:         true,
+		err = s.sendResource(ctx, authChan, fileReq, sendOptions{
+			maxRetries: 3,
+			onlyPost:   true,
 		})
 		if err == nil {
 			logger.Debug("done sending media contents")

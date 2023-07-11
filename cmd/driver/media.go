@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -29,7 +30,7 @@ func (s serverProxy) Upload(ctx context.Context, path string) error {
 	mimeType, ok := s.mimeTypes[ext]
 	if !ok {
 		logger.Error("failed to detect media type", servicelog.String("path", path))
-		return nil
+		return errors.New("failed to detect media type")
 	}
 	return s.server.Media(ctx, s.authChan, mimeType, path)
 }

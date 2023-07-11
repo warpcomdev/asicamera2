@@ -54,10 +54,9 @@ func eternalBackoff() backoff.BackOff {
 }
 
 type sendOptions struct {
-	maxRetries       int
-	limitConcurrency bool
-	onlyPut          bool
-	onlyPost         bool
+	maxRetries int
+	onlyPut    bool
+	onlyPost   bool
 }
 
 func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, resource resource, opts sendOptions) error {
@@ -78,18 +77,6 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 		defer func() {
 			returnErr = PermanentIfCancel(ctx, returnErr)
 		}()
-		// If concurrency of this resource is controller, pick an item from the queue
-		// so only as many as the number of concurrent uploads is in transit
-		if opts.limitConcurrency {
-			logger.Debug("getting concurrency token")
-			<-s.queue
-			defer func() {
-				logger.Debug("going to release concurrency token")
-				s.queue <- struct{}{}
-				logger.Debug("concurrency token released")
-			}()
-			logger.Debug("got concurrency token")
-		}
 		var resp *http.Response
 		if !opts.onlyPut {
 			// Build the request.
@@ -156,7 +143,7 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 		}
 		if resp != nil && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 			err = bodyToError(resp)
-			logger.Error("failed to put data", servicelog.Error(err))
+			logger.Error("failed to upsert data", servicelog.Error(err))
 			return err
 		}
 		logger.Debug("resource send complete")
