@@ -260,7 +260,7 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 			logger.Debug("detected file event")
 			// If a file is removed, we must remove the entry in the log
 			if event.Op&fsnotify.Remove == fsnotify.Remove {
-				f.logger.Info("file removed")
+				logger.Info("file removed")
 				f.FileHistory.RemoveTask(fullName)
 			} else {
 				// If a file is renamed, we must watch it until it is complete.
@@ -268,7 +268,7 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 				// the prev name.
 				mustUpdate := event.Has(fsnotify.Create) || event.Has(fsnotify.Write) || event.Has(fsnotify.Rename)
 				if mustUpdate {
-					f.logger.Debug("dispatch detected file")
+					logger.Debug("dispatch detected file")
 					task, newChannel := f.FileHistory.CreateTask(fullName)
 					// send the information on the channel before creating a goroutine,
 					// to avoid having the inactivity timer trigger before there is actually
@@ -276,7 +276,7 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 					select {
 					case task.Events <- event:
 					default:
-						f.logger.Debug("failed dispatch to task pending cleanup")
+						logger.Debug("failed dispatch to task pending cleanup")
 					}
 					// If the channel is new, start a new uploader routine
 					if newChannel {
