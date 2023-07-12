@@ -106,7 +106,6 @@ func (hfr *httpFileRequest) Read(b []byte) (int, error) {
 	// pipeReader is synchronous, so there is no need to protect
 	// the readError variable with a mutex
 	n, err := hfr.pipeReader.Read(b)
-	hfr.Logger.Debug("read from disk", servicelog.Int("bytes", n))
 	// Propagate errors, if any
 	hfr.mutex.Lock()
 	defer hfr.mutex.Unlock()

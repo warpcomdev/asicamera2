@@ -149,7 +149,6 @@ func (f *FileHistory) Load() error {
 			logger.Warn("file from history no longer exists", servicelog.String("file", fname), servicelog.Error(err))
 			continue
 		}
-		logger.Debug("loaded history line", servicelog.String("file", fname), servicelog.Time("date", timestamp))
 		history[fname] = fileTask{
 			Path:     fname,
 			Uploaded: timestamp,
@@ -203,9 +202,9 @@ func (f *FileHistory) Save() error {
 	return nil
 }
 
-// Get or create a task. The createFunc is called if either the task
-// or the event channel are created.
-func (f *FileHistory) CreateTask(fullName string, onCreate func(newTask fileTask)) fileTask {
+// Get or create a task. The boolean returned is true if
+// the task events channel has been created new.
+func (f *FileHistory) CreateTask(fullName string) (fileTask, bool) {
 	task, taskExist := f.history[fullName]
 	// Make sure there is a task for this file
 	if !taskExist {
@@ -214,13 +213,14 @@ func (f *FileHistory) CreateTask(fullName string, onCreate func(newTask fileTask
 		}
 	}
 	// Make sure the task is expecting events (ready for updates)
+	newChannel := false
 	if task.Events == nil {
 		task.Events = make(chan fsnotify.Event, 1)
-		onCreate(task)
+		newChannel = true
 	}
 	// Update the task in the map, in case we created or modified it
 	f.history[fullName] = task
-	return task
+	return task, newChannel
 }
 
 // Cleanup must be called on termination. It closes all event channels

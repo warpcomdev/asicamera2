@@ -89,19 +89,28 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 	// Notify when we are done
 	defer func() {
 		tasks <- t
+		// once we deliver the result, the channel in this copy of the fileTask
+		// is useless. It's better to exhaust it.
+		for range t.Events {
+		}
 	}()
 	// Notifications arrive WHILE THE FILE IS BEING UPDATED,
 	// so we must wait a safe time before trying to upload the file.
 	// Otherwise, we might upload an incomplete file,
 	// or upload it more than once.
 	// Since the exposition might be long, we will be waiting for a long time.
-	// (up to 30 minutes per file)
+	// (up to 5 minutes per file)
 	inactivity := time.NewTimer(monitorFor)
 	defer inactivity.Stop()
+	// These queues will be used to notify of triggers and completions
 	triggered := make(chan int, 1)
-	defer close(triggered)
-	// This queue will be used to notify of triggersDone triggers
 	triggersDone := make(chan int, 1)
+	defer func() {
+		close(triggered)
+		// exhaust the trigger goroutine
+		for range triggersDone {
+		}
+	}()
 	triggersSent := 0
 	go func() {
 		defer close(triggersDone)
@@ -114,19 +123,22 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 		}
 	}()
 	// This loops watches for events until the file stops changing
+	logger = logger.With(servicelog.String("file", t.Path))
 	for {
 		select {
 		case triggerNumber, ok := <-triggersDone:
 			// If an upload is completed, we must check the sequence number.
 			// if it matches the last request triggered, then we are good to leave.
 			// otherwise, we must wait for another completion
-			logger.Info("upload completed", servicelog.String("file", t.Path), servicelog.Int("trigger", triggerNumber))
 			if !ok || triggerNumber >= triggersSent-1 {
+				logger.Info("upload completed", servicelog.Int("trigger", triggerNumber))
 				return
+			} else {
+				logger.Debug("obsolete upload discarded", servicelog.Int("trigger", triggerNumber))
 			}
 		case <-inactivity.C:
 			// When the inactivity timer expires, trigger an upload
-			logger.Info("inactivity expired, triggering upload", servicelog.String("file", t.Path), servicelog.Duration("monitorFor", monitorFor))
+			logger.Info("inactivity expired, triggering upload", servicelog.Int("trigger", triggersSent), servicelog.Duration("monitorFor", monitorFor))
 			select {
 			case triggered <- triggersSent:
 				// Update the sequence number so we know which trigger
@@ -134,6 +146,7 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 				triggersSent += 1
 				break
 			default:
+				logger.Debug("inactivity expired again but upload is in progress", servicelog.Int("trigger", triggersSent))
 			}
 		case _, ok := <-events:
 			// If the event channel is closed, the file has been removed
@@ -144,8 +157,8 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 				upload_cancel.WithLabelValues(folder).Inc()
 				return
 			}
-			logger.Debug("reset of inactivity timer", servicelog.String("file", t.Path))
 			// Otherwise, reset the inactivity timer
+			logger.Debug("reset of inactivity timer", servicelog.String("file", t.Path))
 			if !inactivity.Stop() {
 				<-inactivity.C
 			}

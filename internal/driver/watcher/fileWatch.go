@@ -130,12 +130,12 @@ func (f *FileWatch) Watch(ctx context.Context) error {
 					f.logger.Debug("skipping directory", servicelog.String("name", event.Name))
 					return
 				}
-				f.logger.Debug("watching new directory", servicelog.String("name", event.Name))
 				err := watcher.Add(event.Name)
 				if err != nil {
 					f.logger.Error("failed to add directory watcher", servicelog.String("name", event.Name), servicelog.Error(err))
 					// it will be retried on next scan
 				}
+				f.logger.Debug("watching new directory", servicelog.String("name", event.Name))
 				return
 			}
 		}
@@ -196,20 +196,24 @@ func (f *FileWatch) Watch(ctx context.Context) error {
 // Merge info from two channels into a single forwarder
 func (f *FileWatch) merge(ctx context.Context, input1, input2 chan fsnotify.Event, forward func(fsnotify.Event)) {
 	// screen events by extension, only matched extensions are forwarded
+	logger := f.logger
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Error("merge context cancelled")
 			return
 		case event, ok := <-input1:
 			// This will cause the events channel to close
 			// and the dispatch goroutine to exit with a
 			// ClosedChannelError
 			if !ok {
+				logger.Error("merge first channel closed")
 				return
 			}
 			forward(event)
 		case event, ok := <-input2:
 			if !ok {
+				logger.Error("merge second channel closed")
 				return
 			}
 			forward(event)
@@ -231,6 +235,16 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 		case <-ctx.Done():
 			f.logger.Debug("event dispatch cancelled", servicelog.String("folder", absPath))
 			return context.Canceled
+		// Put task dispatching before event dispatching. In case there is a
+		// burst of tasks, we want to process dispatchs as they arrive,
+		// giving priority over new tasks
+		case task, ok := <-tasks:
+			if !ok {
+				f.logger.Debug("stopping task watcher", servicelog.String("folder", absPath))
+				return ChannelClosedError
+			}
+			f.FileHistory.CompleteTask(task)
+			f.FileHistory.Save()
 		case <-remap.C:
 			// Make sure the map does not grow infinite with stale entries
 			// removed after a file is erased
@@ -241,11 +255,12 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 				f.logger.Debug("stopping folder watcher", servicelog.String("folder", absPath))
 				return ChannelClosedError
 			}
-			f.logger.Debug("detected file event", servicelog.String("file", event.Name))
 			fullName := filepath.Join(event.Name)
+			logger := f.logger.With(servicelog.String("file", fullName))
+			logger.Debug("detected file event")
 			// If a file is removed, we must remove the entry in the log
 			if event.Op&fsnotify.Remove == fsnotify.Remove {
-				f.logger.Info("file removed", servicelog.String("file", fullName))
+				f.logger.Info("file removed")
 				f.FileHistory.RemoveTask(fullName)
 			} else {
 				// If a file is renamed, we must watch it until it is complete.
@@ -253,27 +268,27 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 				// the prev name.
 				mustUpdate := event.Has(fsnotify.Create) || event.Has(fsnotify.Write) || event.Has(fsnotify.Rename)
 				if mustUpdate {
-					f.logger.Debug("dispatch detected file", servicelog.String("file", fullName))
-					task := f.FileHistory.CreateTask(fullName, func(newTask fileTask) {
+					f.logger.Debug("dispatch detected file")
+					task, newChannel := f.FileHistory.CreateTask(fullName)
+					// send the information on the channel before creating a goroutine,
+					// to avoid having the inactivity timer trigger before there is actually
+					// any change in the file
+					select {
+					case task.Events <- event:
+					default:
+						f.logger.Debug("failed dispatch to task pending cleanup")
+					}
+					// If the channel is new, start a new uploader routine
+					if newChannel {
 						wg.Add(1)
 						go func() {
 							defer wg.Done()
-							f.logger.Info("started monitoring file", servicelog.String("file", newTask.Path))
-							go newTask.upload(ctx, f.logger, f.server, newTask.Events, tasks, f.monitorFor)
+							logger.Info("started monitoring file")
+							task.upload(ctx, f.logger, f.server, task.Events, tasks, f.monitorFor)
 						}()
-					})
-					// Notify the task of a change in the file
-					task.Events <- event
+					}
 				}
 			}
-		case task := <-tasks:
-			// Get the original task object, in case we need
-			// to close the events channel. We cannot close it
-			// from the task object, because it is a copy,
-			// and the original task might have been updated
-			// in the loop.
-			f.FileHistory.CompleteTask(task)
-			f.FileHistory.Save()
 		}
 	}
 }
@@ -294,7 +309,7 @@ func (f *FileWatch) scan(ctx context.Context, absPath string, events chan fsnoti
 				f.logger.Error("failed to scan subpath", servicelog.String("subpath", subPath))
 			}
 		} else {
-			f.logger.Info("scan detected file", servicelog.String("file", entry.Name()))
+			f.logger.Info("scan detected file", servicelog.String("name", entry.Name()))
 		}
 		event := fsnotify.Event{
 			Name: filepath.Join(absPath, entry.Name()),
@@ -302,6 +317,7 @@ func (f *FileWatch) scan(ctx context.Context, absPath string, events chan fsnoti
 		}
 		select {
 		case <-ctx.Done():
+			f.logger.Error("scan context cancelled", servicelog.String("absPath", absPath))
 			return context.Canceled
 		case events <- event:
 		}
