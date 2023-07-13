@@ -68,11 +68,13 @@ func (s *Server) sendResource(ctx context.Context, authChan chan<- AuthRequest, 
 		return err
 	}
 	logger = logger.With(servicelog.String("postURL", postURL))
-	// Build the request for PUT
+	// Set a maximum of retries, even if it is ridiculous (100)
 	var bo backoff.BackOff = eternalBackoff()
-	if opts.maxRetries > 0 {
-		bo = backoff.WithMaxRetries(bo, uint64(opts.maxRetries))
+	maxRetries := opts.maxRetries
+	if maxRetries <= 0 {
+		maxRetries = 100
 	}
+	bo = backoff.WithMaxRetries(bo, uint64(maxRetries))
 	err = backoff.Retry(func() (returnErr error) {
 		defer func() {
 			returnErr = PermanentIfCancel(ctx, returnErr)

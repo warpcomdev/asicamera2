@@ -105,13 +105,13 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 	// These queues will be used to notify of triggers and completions
 	triggered := make(chan int, 1)
 	triggersDone := make(chan int, 1)
+	triggersSent := 0
 	defer func() {
-		close(triggered)
 		// exhaust the trigger goroutine
+		close(triggered)
 		for range triggersDone {
 		}
 	}()
-	triggersSent := 0
 	go func() {
 		defer close(triggersDone)
 		for triggerNum := range triggered {
@@ -191,7 +191,7 @@ func (t fileTask) triggered(ctx context.Context, logger servicelog.Logger, serve
 		upload_dropped.WithLabelValues(folder).Inc()
 		return t.Uploaded
 	}
-	logger.Debug("uploading file", servicelog.Time("modtime", modtime))
+	logger.Debug("uploading file", servicelog.Time("modtime", modtime), servicelog.Time("uploaded", t.Uploaded))
 	// try to upload the file to the server
 	start := time.Now()
 	if err := server.Upload(ctx, t.Path); err != nil {
