@@ -78,7 +78,6 @@ func (s *Server) Media(ctx context.Context, authChan chan<- AuthRequest, mimeTyp
 	logger.Debug("getting concurrency token")
 	<-s.queue
 	defer func() {
-		logger.Debug("going to release concurrency token")
 		s.queue <- struct{}{}
 		logger.Debug("concurrency token released")
 	}()

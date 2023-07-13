@@ -30,6 +30,8 @@ type Config struct {
 	ApiTimeoutSeconds   int               `json:"ApiTimeoutSeconds" toml:"ApiTimeoutSeconds" yaml:"ApiTimeoutSeconds"`
 	ApiConcurrency      int               `json:"ApiConcurrency" toml:"ApiConcurrency" yaml:"ApiConcurrency"`
 	CameraID            string            `json:"CameraID" toml:"CameraID" yaml:"CameraID"`
+	LogFileSizeKb       int               `json:"LogFileSizeKb" toml:"LogFileSizeKb" yaml:"LogFileSizeKb"`
+	LogFileNumber       int               `json:"LogFileNumber" toml:"LogFileNumber" yaml:"LogFileNumber"`
 	Debug               bool              `json:"Debug" toml:"Debug" yaml:"Debug"`
 }
 
@@ -104,6 +106,12 @@ func (config *Config) Check(configPath string) error {
 	}
 	if config.ExpireAfterDays < 0 {
 		config.ExpireAfterDays = 0
+	}
+	if config.LogFileSizeKb <= 0 {
+		config.LogFileSizeKb = 256
+	}
+	if config.LogFileNumber <= 0 {
+		config.LogFileNumber = 100
 	}
 	if config.CameraID == "" {
 		return errors.New("cameraID config parameter is required")
