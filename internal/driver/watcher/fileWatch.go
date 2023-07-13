@@ -229,7 +229,15 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 	defer remap.Stop()
 	f.logger.Info("started dispatching events", servicelog.String("absPath", absPath))
 	var wg sync.WaitGroup
-	defer wg.Wait()
+	defer func() {
+		// exhaust pending tasks
+		for range tasks {
+		}
+		wg.Wait()
+	}()
+	// Make sure we cancel all tasks if we exit for something besides main context cancellation
+	cancelCtx, cancelFunc := context.WithCancel(ctx)
+	defer cancelFunc()
 	for {
 		select {
 		case <-ctx.Done():
@@ -284,7 +292,7 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 						go func() {
 							defer wg.Done()
 							logger.Info("started monitoring file")
-							task.upload(ctx, f.logger, f.server, task.Events, tasks, f.monitorFor)
+							task.upload(cancelCtx, f.logger, f.server, task.Events, tasks, f.monitorFor)
 						}()
 					}
 				}

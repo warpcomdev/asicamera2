@@ -91,7 +91,7 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 		tasks <- t
 		// once we deliver the result, the channel in this copy of the fileTask
 		// is useless. It's better to exhaust it.
-		for range t.Events {
+		for range events {
 		}
 	}()
 	// Notifications arrive WHILE THE FILE IS BEING UPDATED,
