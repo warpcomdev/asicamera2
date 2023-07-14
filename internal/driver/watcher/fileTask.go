@@ -85,13 +85,16 @@ type fileTask struct {
 	Events   chan fsnotify.Event
 }
 
-func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server Server, events chan fsnotify.Event, tasks chan<- fileTask, monitorFor time.Duration) {
+func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server Server, tasks chan<- fileTask, monitorFor time.Duration) {
 	// Notify when we are done
 	defer func() {
 		tasks <- t
 		// once we deliver the result, the channel in this copy of the fileTask
 		// is useless. It's better to exhaust it.
-		for range events {
+		// we can do this because the receiver of this method
+		// is a valuem not a pointer, so noone can change the channel
+		// under our feet.
+		for range t.Events {
 		}
 	}()
 	// Notifications arrive WHILE THE FILE IS BEING UPDATED,
@@ -102,53 +105,11 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 	// (up to 5 minutes per file)
 	inactivity := time.NewTimer(monitorFor)
 	defer inactivity.Stop()
-	// These queues will be used to notify of triggers and completions
-	triggered := make(chan int, 1)
-	triggersDone := make(chan int, 1)
-	triggersSent := 0
-	defer func() {
-		// exhaust the trigger goroutine
-		close(triggered)
-		for range triggersDone {
-		}
-	}()
-	go func() {
-		defer close(triggersDone)
-		for triggerNum := range triggered {
-			// update the modified time of the file we uploaded.
-			// triggers are run sequentially, so there is no race
-			// condition here.
-			t.Uploaded = t.triggered(ctx, logger, server)
-			triggersDone <- triggerNum
-		}
-	}()
 	// This loops watches for events until the file stops changing
 	logger = logger.With(servicelog.String("file", t.Path))
 	for {
 		select {
-		case triggerNumber, ok := <-triggersDone:
-			// If an upload is completed, we must check the sequence number.
-			// if it matches the last request triggered, then we are good to leave.
-			// otherwise, we must wait for another completion
-			if !ok || triggerNumber >= triggersSent-1 {
-				logger.Info("upload completed", servicelog.Int("trigger", triggerNumber))
-				return
-			} else {
-				logger.Debug("obsolete upload discarded", servicelog.Int("trigger", triggerNumber))
-			}
-		case <-inactivity.C:
-			// When the inactivity timer expires, trigger an upload
-			logger.Info("inactivity expired, triggering upload", servicelog.Int("trigger", triggersSent), servicelog.Duration("monitorFor", monitorFor))
-			select {
-			case triggered <- triggersSent:
-				// Update the sequence number so we know which trigger
-				// to wait for
-				triggersSent += 1
-				break
-			default:
-				logger.Debug("inactivity expired again but upload is in progress", servicelog.Int("trigger", triggersSent))
-			}
-		case _, ok := <-events:
+		case _, ok := <-t.Events:
 			// If the event channel is closed, the file has been removed
 			// and we are no longer interested in uploading it. Quit.
 			if !ok {
@@ -163,46 +124,63 @@ func (t fileTask) upload(ctx context.Context, logger servicelog.Logger, server S
 				<-inactivity.C
 			}
 			inactivity.Reset(monitorFor)
+		case <-inactivity.C:
+			// When the inactivity timer expires, trigger an upload
+			logger.Info("inactivity expired, triggering upload", servicelog.Duration("monitorFor", monitorFor))
+			var err error
+			t.Uploaded, err = t.triggered(ctx, logger, server)
+			if err != nil {
+				logger.Error("upload failed", servicelog.Error(err))
+			}
+			return
 		}
 	}
 }
 
-func (t fileTask) triggered(ctx context.Context, logger servicelog.Logger, server Server) time.Time {
+func (t fileTask) triggered(ctx context.Context, logger servicelog.Logger, server Server) (uploaded time.Time, uploadErr error) {
 	// The upload has been triggered!
-	logger = logger.With(servicelog.String("file", t.Path), servicelog.Time("uploaded", t.Uploaded))
 	folder := filepath.Dir(t.Path)
+	var start time.Time
+	// Update metrics and alerts
 	upload_detect.WithLabelValues(folder).Inc()
+	defer func() {
+		alertName := "upload_file"
+		alertID := fmt.Sprintf("%s_%s_%s", alertName, server.CameraID(), t.Path)
+		if uploadErr != nil {
+			upload_error.WithLabelValues(folder).Inc()
+			server.SendAlert(ctx, alertID, alertName, "error", uploadErr.Error())
+			return
+		}
+		if uploaded == t.Uploaded {
+			upload_dropped.WithLabelValues(folder).Inc()
+			return
+		}
+		duration := time.Since(start)
+		upload_success.WithLabelValues(folder).Inc()
+		upload_duration.WithLabelValues(folder).Observe(duration.Seconds())
+		server.ClearAlert(ctx, alertID)
+	}()
+	// Check if the file has been modified since the last upload
+	logger = logger.With(servicelog.Time("uploaded", t.Uploaded))
 	info, err := os.Stat(t.Path)
-	alertName := "upload_file"
-	alertID := fmt.Sprintf("%s_%s_%s_%s", alertName, server.CameraID(), t.Path, time.Now().Format(time.RFC3339))
 	if err != nil {
-		logger.Error("failed to stat file", servicelog.Error(err))
-		upload_error.WithLabelValues(folder).Inc()
-		server.SendAlert(ctx, alertID, alertName, "error", err.Error())
-		return t.Uploaded
+		return t.Uploaded, err
 	}
 	// BEWARE: modtime reports time in nanoseconds, but the history file
 	// for some reason only saves with resolution of seconds. So we must round before
 	// comparing, otherwise we always upload.
 	modtime := info.ModTime().Round(time.Second)
+	logger = logger.With(servicelog.Time("modtime", modtime))
 	if !modtime.After(t.Uploaded) {
 		// The file has not been modified since the last upload
 		logger.Info("file not modified")
-		upload_dropped.WithLabelValues(folder).Inc()
-		return t.Uploaded
+		return t.Uploaded, nil
 	}
-	logger.Debug("uploading file", servicelog.Time("modtime", modtime), servicelog.Time("uploaded", t.Uploaded))
+	logger.Debug("uploading file")
 	// try to upload the file to the server
-	start := time.Now()
+	start = time.Now()
 	if err := server.Upload(ctx, t.Path); err != nil {
-		logger.Error("failed to upload file", servicelog.String("file", t.Path), servicelog.Error(err))
-		upload_error.WithLabelValues(folder).Inc()
-		server.SendAlert(ctx, alertID, alertName, "error", err.Error())
-		return t.Uploaded
+		return t.Uploaded, err
 	}
-	duration := time.Since(start)
-	upload_success.WithLabelValues(folder).Inc()
-	upload_duration.WithLabelValues(folder).Observe(duration.Seconds())
-	server.ClearAlert(ctx, alertID)
-	return info.ModTime()
+	return modtime.Add(time.Second), nil
 }

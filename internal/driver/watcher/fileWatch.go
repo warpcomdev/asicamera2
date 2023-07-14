@@ -51,23 +51,24 @@ func New(logger servicelog.Logger, historyFolder string, server Server, folder s
 func (f *FileWatch) Watch(ctx context.Context) error {
 	// Make sure the folder exists
 	absPath, err := filepath.Abs(f.folder)
+	logger := f.logger.With(servicelog.String("folder", absPath))
 	if err != nil {
-		f.logger.Error("failed to abs folder", servicelog.String("folder", absPath), servicelog.Error(err))
+		logger.Error("failed to abs folder", servicelog.Error(err))
 		return err
 	}
 	stat, err := os.Stat(absPath)
 	if err != nil {
-		f.logger.Error("failed to stat folder", servicelog.String("folder", absPath), servicelog.Error(err))
+		logger.Error("failed to stat folder", servicelog.Error(err))
 		return err
 	}
 	// Make sure it is a directory
 	if !stat.IsDir() {
-		f.logger.Error("path is not a directory", servicelog.String("folder", absPath))
+		logger.Error("path is not a directory")
 		return NotDirectoryError
 	}
 	// Load the history file
 	if err := f.FileHistory.Load(); err != nil {
-		f.logger.Error("failed to load history", servicelog.String("folder", absPath), servicelog.Error(err))
+		logger.Error("failed to load history", servicelog.Error(err))
 		return err
 	}
 	// Cleanup history tasks after we are done
@@ -77,7 +78,7 @@ func (f *FileWatch) Watch(ctx context.Context) error {
 	// Create a notify watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		f.logger.Error("failed to create watcher", servicelog.String("folder", absPath), servicelog.Error(err))
+		logger.Error("failed to create watcher", servicelog.Error(err))
 		return err
 	}
 	defer watcher.Close()
@@ -101,7 +102,7 @@ func (f *FileWatch) Watch(ctx context.Context) error {
 					watcherErr = ChannelClosedError
 					return
 				}
-				f.logger.Error("watcher error", servicelog.String("folder", absPath), servicelog.Error(err))
+				logger.Error("watcher error", servicelog.Error(err))
 				watcherErr = err
 				return
 			case <-failContext.Done():
@@ -115,34 +116,35 @@ func (f *FileWatch) Watch(ctx context.Context) error {
 	events := make(chan fsnotify.Event, 16)
 	// This screener filters events by extension, only matched extensions are forwarded
 	screen := func(event fsnotify.Event) {
+		logger := f.logger.With(servicelog.String("file", event.Name))
 		ext := strings.ToLower(filepath.Ext(event.Name))
-		f.logger.Debug("screening event", servicelog.String("file", event.Name), servicelog.String("ext", ext))
+		logger.Debug("screening event", servicelog.String("ext", ext))
 		// Check if it is a new directory. We don't neeed to watch for renames
 		// because the watcher will do that automatically.
 		if event.Has(fsnotify.Create) {
 			stat, err := os.Stat(event.Name)
 			if err != nil {
-				f.logger.Error("failed to stat file", servicelog.String("name", event.Name), servicelog.Error(err))
+				logger.Error("failed to stat file", servicelog.Error(err))
 				return
 			}
 			if stat.IsDir() {
 				if strings.HasSuffix(event.Name, ".") {
-					f.logger.Debug("skipping directory", servicelog.String("name", event.Name))
+					logger.Debug("skipping directory")
 					return
 				}
 				err := watcher.Add(event.Name)
 				if err != nil {
-					f.logger.Error("failed to add directory watcher", servicelog.String("name", event.Name), servicelog.Error(err))
+					logger.Error("failed to add directory watcher", servicelog.Error(err))
 					// it will be retried on next scan
 				}
-				f.logger.Debug("watching new directory", servicelog.String("name", event.Name))
+				logger.Debug("watching new directory")
 				return
 			}
 		}
 		// Otherwise, check if it is an interesting file
 		if ext != "" {
 			if _, ok := f.fileTypes[ext]; !ok {
-				f.logger.Debug("Unrecognized extension", servicelog.String("ext", ext), servicelog.String("file", event.Name))
+				logger.Debug("Unrecognized extension", servicelog.String("ext", ext))
 			} else {
 				events <- event
 			}
@@ -180,7 +182,7 @@ func (f *FileWatch) Watch(ctx context.Context) error {
 	// Add a path to watch
 	notifyErr := watcher.Add(absPath)
 	if notifyErr != nil {
-		f.logger.Error("failed to watch folder", servicelog.String("folder", absPath), servicelog.Error(err))
+		logger.Error("failed to watch folder", servicelog.Error(err))
 		cancel()
 	}
 	wg.Wait()
@@ -223,32 +225,34 @@ func (f *FileWatch) merge(ctx context.Context, input1, input2 chan fsnotify.Even
 
 // Dispatch events until context is cancelled
 func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fsnotify.Event) error {
-	tasks := make(chan fileTask, 16)
-	defer close(tasks)
-	remap := time.NewTicker(24 * time.Hour)
-	defer remap.Stop()
-	f.logger.Info("started dispatching events", servicelog.String("absPath", absPath))
 	var wg sync.WaitGroup
+	tasks := make(chan fileTask, 16)
 	defer func() {
-		// exhaust pending tasks
+		// Wait until all goroutines that might
+		// write to tasks are done
+		wg.Wait()
+		// close and exhaust pending tasks
+		close(tasks)
 		for range tasks {
 		}
-		wg.Wait()
 	}()
+	remap := time.NewTicker(24 * time.Hour)
+	defer remap.Stop()
+	f.logger.Info("started dispatching events")
 	// Make sure we cancel all tasks if we exit for something besides main context cancellation
 	cancelCtx, cancelFunc := context.WithCancel(ctx)
 	defer cancelFunc()
 	for {
 		select {
 		case <-ctx.Done():
-			f.logger.Debug("event dispatch cancelled", servicelog.String("folder", absPath))
+			f.logger.Debug("event dispatch cancelled")
 			return context.Canceled
 		// Put task dispatching before event dispatching. In case there is a
 		// burst of tasks, we want to process dispatchs as they arrive,
 		// giving priority over new tasks
 		case task, ok := <-tasks:
 			if !ok {
-				f.logger.Debug("stopping task watcher", servicelog.String("folder", absPath))
+				f.logger.Debug("stopping task watcher")
 				return ChannelClosedError
 			}
 			f.FileHistory.CompleteTask(task)
@@ -260,7 +264,7 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 			f.FileHistory.Remap()
 		case event, ok := <-events:
 			if !ok {
-				f.logger.Debug("stopping folder watcher", servicelog.String("folder", absPath))
+				f.logger.Debug("stopping folder watcher")
 				return ChannelClosedError
 			}
 			fullName := filepath.Join(event.Name)
@@ -284,7 +288,7 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 					select {
 					case task.Events <- event:
 					default:
-						logger.Debug("failed dispatch to task pending cleanup")
+						logger.Debug("failed dispatch to busy task")
 					}
 					// If the channel is new, start a new uploader routine
 					if newChannel {
@@ -292,7 +296,7 @@ func (f *FileWatch) dispatch(ctx context.Context, absPath string, events chan fs
 						go func() {
 							defer wg.Done()
 							logger.Info("started monitoring file")
-							task.upload(cancelCtx, f.logger, f.server, task.Events, tasks, f.monitorFor)
+							task.upload(cancelCtx, f.logger, f.server, tasks, f.monitorFor)
 						}()
 					}
 				}

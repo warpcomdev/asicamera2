@@ -160,7 +160,8 @@ func (f *FileHistory) Load() error {
 
 // Save the upload history
 func (f *FileHistory) Save() error {
-	f.logger.Debug("updating log file", servicelog.String("historyFile", f.historyFile))
+	logger := f.logger.With(servicelog.String("historyFile", f.historyFile))
+	logger.Debug("updating log file")
 	var lastUpdate time.Time
 	history := make(map[string]string, len(f.history))
 	for path, data := range f.history {
@@ -176,7 +177,7 @@ func (f *FileHistory) Save() error {
 	logFolder := filepath.Dir(f.historyFile)
 	file, err := ioutil.TempFile(logFolder, "logHistory")
 	if err != nil {
-		f.logger.Error("failed to create temporary log file", servicelog.String("folder", logFolder), servicelog.Error(err))
+		logger.Error("failed to create temporary log file", servicelog.String("folder", logFolder), servicelog.Error(err))
 		return err
 	}
 	defer func() {
@@ -195,7 +196,7 @@ func (f *FileHistory) Save() error {
 	buf.Flush()
 	file.Close()
 	if err := os.Rename(file.Name(), f.historyFile); err != nil {
-		f.logger.Error("failed to rename temporary log file", servicelog.String("tmpFile", file.Name()), servicelog.String("file", f.historyFile))
+		logger.Error("failed to rename temporary log file", servicelog.String("tmpFile", file.Name()))
 		return err
 	}
 	file = nil // prevent deletion
