@@ -95,6 +95,11 @@ func (f *FileHistory) Remap() {
 				logger.Error("could not determine how to clean up expired file", servicelog.Error(err))
 			}
 		}
+		if !keep && task.Events != nil {
+			// avoid leaking goroutines
+			close(task.Events)
+			task.Events = nil
+		}
 		if keep {
 			newMap[task.Path] = task
 		}
