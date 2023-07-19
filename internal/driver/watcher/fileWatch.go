@@ -25,10 +25,11 @@ type FileWatch struct {
 	server      Server
 	folder      string
 	monitorFor  time.Duration
+	denyList    []string
 }
 
 // New creates a new FileWatch object
-func New(logger servicelog.Logger, historyFolder string, server Server, folder string, fileTypes map[string]struct{}, monitorFor time.Duration, expiration time.Duration) *FileWatch {
+func New(logger servicelog.Logger, historyFolder string, server Server, folder string, fileTypes map[string]struct{}, monitorFor time.Duration, expiration time.Duration, denyList []string) *FileWatch {
 	// Generate unique history file name from folder name
 	hash := fnv.New64a()
 	hash.Write([]byte(folder))
@@ -43,8 +44,25 @@ func New(logger servicelog.Logger, historyFolder string, server Server, folder s
 		folder:      folder,
 		fileTypes:   fileTypes,
 		monitorFor:  monitorFor,
+		denyList:    cleanDenyList(logger, denyList),
 	}
 	return f
+}
+
+// Preprocess the deny list, filter out any invalid entries
+func cleanDenyList(logger servicelog.Logger, denyList []string) []string {
+	buffer := make([]string, 0, len(denyList))
+	for _, v := range denyList {
+		if v != "" {
+			_, err := filepath.Match(v, "test")
+			if err != nil {
+				logger.Error("invalid deny list entry", servicelog.String("entry", v), servicelog.Error(err))
+			} else {
+				buffer = append(buffer, v)
+			}
+		}
+	}
+	return buffer
 }
 
 // Watch the folder for changes
@@ -119,6 +137,15 @@ func (f *FileWatch) Watch(ctx context.Context) error {
 		logger := f.logger.With(servicelog.String("file", event.Name))
 		ext := strings.ToLower(filepath.Ext(event.Name))
 		logger.Debug("screening event", servicelog.String("ext", ext))
+		// Check if the file name matches the deny list
+		baseName := filepath.Base(event.Name)
+		for _, deny := range f.denyList {
+			match, err := filepath.Match(deny, baseName)
+			if err == nil && match {
+				logger.Debug("skipping denied file because of match", servicelog.String("deny", deny))
+				return
+			}
+		}
 		// Check if it is a new directory. We don't neeed to watch for renames
 		// because the watcher will do that automatically.
 		if event.Has(fsnotify.Create) {

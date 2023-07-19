@@ -28,3 +28,8 @@ ApiSkipVerify = true
 # en la configuración de la cámara
 ApiRefreshMinutes = 10
 Debug = true
+# Lista de ficheros que no serán subidos al backend
+DenyList = [
+    "skip.*",
+    "*.tmp"
+]

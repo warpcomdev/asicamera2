@@ -33,6 +33,7 @@ type Config struct {
 	LogFileSizeKb       int               `json:"LogFileSizeKb" toml:"LogFileSizeKb" yaml:"LogFileSizeKb"`
 	LogFileNumber       int               `json:"LogFileNumber" toml:"LogFileNumber" yaml:"LogFileNumber"`
 	Debug               bool              `json:"Debug" toml:"Debug" yaml:"Debug"`
+	DenyList            []string          `json:"DenyList" toml:"DenyList" yaml:"DenyList"` // Files not uploaded
 }
 
 func normalizeExtension(ext string) string {
@@ -115,6 +116,9 @@ func (config *Config) Check(configPath string) error {
 	}
 	if config.CameraID == "" {
 		return errors.New("cameraID config parameter is required")
+	}
+	if config.DenyList == nil {
+		config.DenyList = []string{}
 	}
 	return nil
 }
