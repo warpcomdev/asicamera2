@@ -11,6 +11,9 @@ MaxHeaderBytes = 1048576
 # Directorios para almacenar la historia de subidas, y los logs
 HistoryFolder = "C:/AsiCamera/History"
 LogFolder = "C:/AsiCamera/Logs"
+# Tamaño máximo de los ficheros de log (en megabytes), y número máximo de ficheros
+LogFileSizeMb = 128
+LogFileNumber = 100
 # Tiempo de espera de inactividad antes de comenzar a subir una captura
 MonitorForMinutes = 1
 # Tiempo de espera antes de borrar de disco una captura ya subida

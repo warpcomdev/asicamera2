@@ -53,7 +53,7 @@ func Duration(name string, value time.Duration) Attrib {
 	return zap.Duration(name, value)
 }
 
-func New(root service.Logger, logDir string, fileSize int, fileNum int, debug bool) (Logger, error) {
+func New(root service.Logger, logDir string, fileSizeMb int, fileNum int, debug bool) (Logger, error) {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return Logger{}, err
 	}
@@ -64,7 +64,7 @@ func New(root service.Logger, logDir string, fileSize int, fileNum int, debug bo
 		return lumberjackSink{
 			Logger: &lumberjack.Logger{
 				Filename:   logFile,
-				MaxSize:    fileSize,
+				MaxSize:    fileSizeMb,
 				MaxBackups: fileNum,
 			},
 		}, nil

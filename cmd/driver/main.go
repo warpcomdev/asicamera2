@@ -186,7 +186,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	logger, err := servicelog.New(rootLogger, config.LogFolder, config.LogFileSizeKb*1024, config.LogFileNumber, config.Debug)
+	logger, err := servicelog.New(rootLogger, config.LogFolder, config.LogFileSizeMb, config.LogFileNumber, config.Debug)
 	if err != nil {
 		panic(err)
 	}
