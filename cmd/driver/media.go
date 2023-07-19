@@ -122,6 +122,7 @@ func watchMedia(ctx context.Context, logger servicelog.Logger, config Config, se
 			config.FileTypes(),
 			time.Duration(config.MonitorForMinutes)*time.Minute,
 			time.Duration(config.ExpireAfterDays)*time.Hour*24,
+			config.DenyList,
 		)
 		watcherCtx, watcherCancel := context.WithCancel(ctx)
 		cancelPrevWatcher = watcherCancel
