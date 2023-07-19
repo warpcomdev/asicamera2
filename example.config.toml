@@ -30,6 +30,9 @@ ApiRefreshMinutes = 10
 Debug = true
 # Lista de ficheros que no serán subidos al backend
 DenyList = [
-    "skip.*",
-    "*.tmp"
+  "last_AVI_sequence.avi",
+  "last_AVI_sequence.AVI",
+  "Slice",
+  "*__to__*.avi",
+  "*__to__*.AVI"
 ]
