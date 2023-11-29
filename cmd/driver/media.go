@@ -15,12 +15,13 @@ import (
 )
 
 type serverProxy struct {
-	logger    servicelog.Logger
-	server    *backend.Server
-	authChan  chan<- backend.AuthRequest
-	wg        *sync.WaitGroup
-	mimeTypes map[string]string
-	cameraID  string
+	logger          servicelog.Logger
+	server          *backend.Server
+	authChan        chan<- backend.AuthRequest
+	wg              *sync.WaitGroup
+	mimeTypes       map[string]string
+	cameraID        string
+	cameraKeepalive chan struct{}
 }
 
 // Upload implements the watcher.Server interface
@@ -31,6 +32,11 @@ func (s serverProxy) Upload(ctx context.Context, path string) error {
 	if !ok {
 		logger.Error("failed to detect media type", servicelog.String("path", path))
 		return errors.New("failed to detect media type")
+	}
+	// Notify the keepalive channel there is a new update attempt
+	select {
+	case s.cameraKeepalive <- struct{}{}:
+	default:
 	}
 	return s.server.Media(ctx, s.authChan, mimeType, path)
 }
@@ -80,12 +86,13 @@ func watchMedia(ctx context.Context, logger servicelog.Logger, config Config, se
 	}()
 	// Proxy to handle to watcher tasks
 	proxy := &serverProxy{
-		logger:    logger,
-		server:    server,
-		authChan:  authChan,
-		wg:        &wg,
-		mimeTypes: config.MimeTypes,
-		cameraID:  config.CameraID,
+		logger:          logger,
+		server:          server,
+		authChan:        authChan,
+		wg:              &wg,
+		mimeTypes:       config.MimeTypes,
+		cameraID:        config.CameraID,
+		cameraKeepalive: make(chan struct{}, 1),
 	}
 	// start USB monitor
 	wg.Add(1)
@@ -100,6 +107,32 @@ func watchMedia(ctx context.Context, logger servicelog.Logger, config Config, se
 	go func() {
 		defer wg.Done()
 		server.WatchFolder(ctx, authChan, folderChan, time.Duration(config.ApiRefreshMinutes)*time.Minute)
+	}()
+	// start update watcher. Send an alert if there are no updates to
+	// the folder in 24 hours
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTimer(24 * time.Hour)
+		select {
+		case <-proxy.cameraKeepalive:
+			// Stop and drain the timer
+			if t.Stop() {
+				select {
+				case <-t.C:
+				default:
+				}
+			}
+			// expect up to 24 more hours
+			t.Reset(24 * time.Hour)
+		case <-t.C:
+			// 24 hours without updates
+			alertName := "camera_not_recording"
+			alertID := fmt.Sprintf("%s_%s", alertName, proxy.CameraID())
+			proxy.SendAlert(ctx, alertID, alertName, "warning", "No new recordings detected in 24 hours")
+		case <-ctx.Done():
+			return
+		}
 	}()
 	// Each time the update folder changes, create a new watcher
 	var cancelPrevWatcher func()
